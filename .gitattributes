@@ -1,0 +1,7 @@
+* text=auto
+# The Linux/macOS build script must keep Unix line endings
+android/gradlew text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.webp binary
+*.jar binary

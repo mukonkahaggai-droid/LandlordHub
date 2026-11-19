@@ -1,0 +1,20 @@
+# Private: tenants' invite details kept by the laptop server
+data/
+
+# Downloaded tools and generated copies
+node_modules/
+www/
+builds/
+
+# Android signing keys must never be uploaded (keep them safe offline)
+*.jks
+*.keystore
+
+# Design files and local settings
+GraphiX/
+.claude/
+
+# Windows and editor clutter
+Thumbs.db
+desktop.ini
+*.log

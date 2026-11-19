@@ -1,0 +1,8 @@
+{
+  "appId": "com.voltatech.landlordhub",
+  "appName": "Landlord Hub",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#7e0223"
+  }
+}

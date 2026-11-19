@@ -1,0 +1,19 @@
+{
+  "name": "landlord-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Rent management for Zambian landlords, caretakers and tenants.",
+  "scripts": {
+    "start": "node server.js",
+    "build": "node scripts/build-www.js",
+    "android:sync": "node scripts/build-www.js && npx cap sync android",
+    "android:open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/core": "^8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2"
+  }
+}
