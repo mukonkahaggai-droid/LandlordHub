@@ -1119,11 +1119,11 @@
     const line = (m) => `${money(m.amount)} · ${LH.wallet(m.net || LH.network(state.landlord.phone))}${m.ref ? ` · Ref ${esc(m.ref)}` : ''}`;
     setSheet(`${sheetHead(done.length ? (auto ? 'Rent received by MoMo / Airtel' : 'Payments recorded') : auto ? 'Money received' : 'Messages read')}
       ${done.length ? `<section class="sms-group"><h3>${icon('check', 'sm')}Recorded (${done.length})</h3>${auto ? '<p class="small muted">Read from your MoMo and Airtel messages and taken off what each tenant owes.</p>' : ''}<div class="list">${done.map(({ m, t, p }) => `<div class="row-wrap"><button class="row" data-action="receipt" data-id="${p.id}"><span class="tile">${icon('wallet')}</span><div class="grow"><div class="title">${esc(t.name)}</div><div class="meta">${line(m)}</div><div class="meta">From ${LH.prettyPhone(m.phone)} · receipt ${esc(p.receipt)}</div></div></button><a class="btn sm" href="${LH.waLink(t.phone, receiptMessage(t, p))}" target="_blank" rel="noopener" aria-label="Send ${esc(first(t.name))} a thank-you on WhatsApp">${icon('chat', 'sm')}Thank</a></div>`).join('')}</div></section>` : ''}
-      ${ask.length ? `<section class="sms-group"><h3>${icon('info', 'sm')}Needs you (${ask.length})</h3>${ask.some((x) => x.m.unverified) ? `<p class="small muted"><strong>Check your MoMo or Airtel balance first.</strong> ${ask.every((x) => x.m.unverified) ? "These messages didn't" : "Some of these didn't"} come from MTN or Airtel directly, so they could be fake. Only record money you can see arrived.</p>` : ''}<p class="small muted">Choose who paid. A new number will be added to their lines for next time.</p>
+      ${ask.length ? `<section class="sms-group"><h3>${icon('info', 'sm')}Needs you (${ask.length})</h3>${ask.some((x) => x.m.unverified) ? `<p class="small muted"><strong>Check your mobile money balance first.</strong> ${ask.every((x) => x.m.unverified) ? "These messages didn't" : "Some of these didn't"} come from MTN, Airtel or Zamtel directly, so they could be fake. Only record money you can see arrived.</p>` : ''}<p class="small muted">Choose who paid. A new number will be added to their lines for next time.</p>
         ${ask.map(({ m, guess }, i) => `<form class="card pad sms-ask" data-form="smsAssign"><input type="hidden" name="i" value="${i}">
           <div class="title" style="font-weight:700">${money(m.amount)}${m.name ? ` from ${esc(m.name)}` : ''}</div><div class="meta">${m.phone ? LH.prettyPhone(m.phone) : 'No number in the message'}${m.ref ? ` · Ref ${esc(m.ref)}` : ''}</div>
           <div class="btn-row mt-s"><select class="input" name="tenant" required style="flex:1.6"><option value="">Who paid?</option>${activeTenants().map((t) => `<option value="${t.id}" ${guess && guess.id === t.id ? 'selected' : ''}>${esc(t.name)} — ${esc(unitOf(t).label)}</option>`).join('')}</select><button class="btn primary" type="submit">Record</button></div>
-          ${m.unverified ? `<div class="help">Not from MTN or Airtel directly.</div>` : guess ? `<div class="help">The name matches ${esc(guess.name)}. Check before recording.</div>` : ''}</form>`).join('')}</section>` : ''}
+          ${m.unverified ? `<div class="help">Not from MTN, Airtel or Zamtel directly.</div>` : guess ? `<div class="help">The name matches ${esc(guess.name)}. Check before recording.</div>` : ''}</form>`).join('')}</section>` : ''}
       ${dup.length ? `<p class="small muted mt">${dup.length} message${dup.length === 1 ? ' was' : 's were'} already recorded, so ${dup.length === 1 ? 'it was' : 'they were'} skipped.</p>` : ''}
       ${!found.length ? `<div class="empty">No money received was found in what you pasted. Paste the whole message from MTN MoMo or Airtel Money, including the amount.</div>` : ''}
       <div class="btn-row mt"><button class="btn" data-action="smsAgain">Paste more</button><button class="btn primary" data-action="closeSheet">Done</button></div>`);
@@ -1137,56 +1137,104 @@
   const SMS_AUTO = 'landlordhub.smsauto', SMS_SINCE = 'landlordhub.smssince';
   const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
   const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} };
-  // Real payment SMS come from a sender name such as "MoMo" or "AirtelMoney", never a phone number.
+  // Real payment SMS come from a sender name such as "MoMo", "AirtelMoney" or "Zamtel", never a phone number.
   // Keep in step with TRUSTED_SENDER in android/.../SmsStore.java.
-  const TRUSTED_SENDER = /momo|mtn|airtel/i;
+  const TRUSTED_SENDER = /momo|mtn|airtel|zamtel|kwacha/i;
   const trustedSender = (from) => /[a-z]/i.test(String(from || '')) && TRUSTED_SENDER.test(String(from || ''));
+  let smsAccess = null; // is Notification access on? (checked each time the app is opened)
   const smsAutoOn = () => !!window.LHNative && lsGet(SMS_AUTO) === '1';
-  let smsSyncing = false;
+  let smsSyncing = false, smsAgainAfter = false, smsWantsOn = false;
+  const smsQueue = []; // pop-ups that arrived while the app is open
+
+  /* Payments read from MoMo / Airtel / Zamtel pop-ups are recorded quietly: no sheet, no prompt.
+     Only an exact match between the sender's number and one of a tenant's saved lines is taken off
+     that tenant's rent. Anything else waits in a short list on the More page for the landlord. */
+  function recordQuietly(found) {
+    let changed = false;
+    found.forEach((m) => {
+      if (alreadyRecorded(m)) return;
+      const t = !m.unverified && tenantByLine(m.phone);
+      const wallet = LH.wallet(m.net || LH.network(state.landlord.phone));
+      if (t) {
+        addPayment({ tenantId: t.id, amount: m.amount, date: m.date && m.date <= iso(T()) ? m.date : iso(T()), method: wallet, ref: m.ref || '', by: 'landlord', byName: 'Automatic (' + wallet + ')', status: 'confirmed', smsKey: smsKey(m), fromSms: true });
+        state.activity.push({ id: LH.uid('a'), date: iso(T()), who: 'Landlord Hub', text: `Recorded ${money(m.amount)} from ${t.name} (${LH.prettyPhone(m.phone)}) from a ${wallet} message`, at: Date.now() });
+      } else {
+        state.smsWaiting = state.smsWaiting || [];
+        if (state.smsWaiting.some((w) => smsKey(w) === smsKey(m))) return;
+        state.smsWaiting.push(m);
+      }
+      changed = true;
+    });
+    if (changed) { save(); render(); }
+  }
+  const smsWaiting = () => (state.smsWaiting = (state.smsWaiting || []).filter((m) => !alreadyRecorded(m)));
+
   async function nativeSmsSync(live) {
-    if (!smsAutoOn() || !session || session.role !== 'landlord' || smsSyncing) return;
+    if (live) smsQueue.push(live);
+    if (!window.LHNative || !session || session.role !== 'landlord') return;
+    if (smsSyncing) { smsAgainAfter = true; return; } // a second pop-up while the first is being recorded
     smsSyncing = true;
     try {
-      const since = Number(lsGet(SMS_SINCE)) || Date.now();
-      let msgs = live ? [live] : [];
-      if (!live) {
-        msgs = await window.LHNative.pending().catch(() => []);
-        const st = await window.LHNative.status().catch(() => ({ granted: false }));
-        if (st.granted) msgs = msgs.concat(await window.LHNative.inbox(since).catch(() => []));
-      }
-      let newest = since;
+      const st = await window.LHNative.status().catch(() => ({ granted: false }));
+      const was = smsAccess; smsAccess = !!st.granted;
+      // Coming back from the phone's settings after tapping Turn on.
+      if (smsWantsOn) {
+        smsWantsOn = false;
+        if (smsAccess) {
+          lsSet(SMS_AUTO, '1'); lsSet(SMS_SINCE, String(Date.now())); // only payments from now on
+          log('Turned on automatic recording of MoMo, Airtel and Zamtel payments');
+          save(); render(); toast('On. Payments from your tenants will now be recorded by themselves.');
+        } else toast('Notification access is still off, so payments are not recorded yet.');
+      } else if (was !== smsAccess && route()[0] === 'more') render();
+      if (!smsAutoOn() || !smsAccess) return;
+      const since = Number(lsGet(SMS_SINCE)) || 0;
+      const msgs = smsQueue.splice(0).concat(await window.LHNative.pending().catch(() => []));
       const found = [];
       msgs.forEach((x) => {
         if (x.date && x.date < since) return; // from before it was switched on
-        newest = Math.max(newest, Number(x.date) || 0);
         const unverified = !trustedSender(x.from);
         LH.parseMoneySms(x.body).forEach((m) => {
           if (!m.date && x.date) m.date = iso(new Date(Number(x.date)));
           if (unverified) m.unverified = true;
+          // The sender's name says which wallet it came to when the message itself doesn't.
+          else if (!m.net) m.net = /airtel/i.test(x.from) ? 'Airtel' : /zamtel|kwacha/i.test(x.from) ? 'Zamtel' : 'MTN';
           if (!found.some((f) => smsKey(f) === smsKey(m))) found.push(m);
         });
       });
-      lsSet(SMS_SINCE, String(newest));
-      const fresh = found.filter((m) => !alreadyRecorded(m));
-      if (fresh.length) smsResults(fresh, true);
-    } finally { smsSyncing = false; }
+      // Pop-ups from MoMo / Airtel / Zamtel are recorded quietly. A message the landlord shared into
+      // the app themselves (Share → Landlord Hub) is shown, so they can check it before recording.
+      const shared = found.filter((m) => m.unverified && !alreadyRecorded(m));
+      recordQuietly(found.filter((m) => !m.unverified));
+      if (shared.length) smsResults(shared, true);
+    } finally {
+      smsSyncing = false;
+      if (smsAgainAfter) { smsAgainAfter = false; nativeSmsSync(); }
+    }
   }
   if (window.LHNative) {
     window.LHNative.onMessage((m) => nativeSmsSync(m));
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') nativeSmsSync(); });
   }
   function smsAutoCard() {
+    const head = '<section class="section"><div class="section-head"><h2>Automatic MoMo, Airtel and Zamtel payments</h2></div>';
     if (!window.LHNative) {
-      return `<section class="section"><div class="section-head"><h2>Automatic payment SMS</h2></div>
-        <div class="card pad link-card"><span class="at-icon">${icon('sms')}</span><div class="grow"><strong>In the Android app</strong><div class="small muted">Landlord Hub can read MTN MoMo and Airtel Money "money received" messages and record the rent by itself. Here in the browser, use “Record from a payment SMS”.</div></div></div></section>`;
+      return `${head}
+        <div class="card pad link-card"><span class="at-icon">${icon('sms')}</span><div class="grow"><strong>In the Android app</strong><div class="small muted">Landlord Hub reads the "money received" pop-ups from MTN MoMo, Airtel Money and Zamtel, and takes each payment off the tenant's rent by itself. Here in the browser, use “Record from a payment SMS”.</div></div></div></section>`;
     }
-    const on = smsAutoOn();
-    return `<section class="section"><div class="section-head"><h2>Automatic payment SMS</h2></div>
+    const on = smsAutoOn() && smsAccess !== false, lost = smsAutoOn() && smsAccess === false;
+    const waiting = smsWaiting();
+    return `${head}
       <div class="card pad link-card ${on ? 'ok' : ''}"><span class="at-icon">${icon(on ? 'check' : 'sms')}</span><div class="grow">
-        <strong>${on ? 'On: payments are recorded by themselves' : 'Record MoMo and Airtel payments automatically'}</strong>
-        <div class="small muted">${on ? 'When MTN MoMo or Airtel Money tells you money came in, it is matched to the tenant by their phone line and taken off what they owe. Only "money received" messages are read.' : 'Landlord Hub reads only the "money received" messages from MTN MoMo and Airtel Money, matches the sender to your tenant, and records the rent. Nothing else in your messages is read or shared.'}</div>
+        <strong>${on ? 'On: payments are recorded by themselves' : lost ? 'Off: notification access was turned off' : 'Record payments automatically'}</strong>
+        <div class="small muted">${on
+          ? "When a MoMo, Airtel or Zamtel pop-up says money came in from a number saved for a tenant, it is taken off what that tenant owes. Nothing pops up; you see it on the tenant's page."
+          : "Landlord Hub does not read your messages. It only looks at the pop-ups from MTN MoMo, Airtel Money and Zamtel. When the number that sent money is one of a tenant's saved lines, the payment is taken off their rent by itself."}</div>
+        ${on ? '' : '<div class="small muted mt-s">Tap Turn on, switch on <strong>Landlord Hub</strong> under <strong>Notification access</strong>, then come back.</div>'}
         <button class="btn ${on ? '' : 'primary'} sm mt-s" data-action="${on ? 'smsAutoOff' : 'smsAutoEnable'}">${on ? 'Turn off' : 'Turn on'}</button>
-      </div></div></section>`;
+      </div></div>
+      ${waiting.length ? `<div class="card pad mt-s"><strong>${waiting.length} payment${waiting.length === 1 ? '' : 's'} from ${waiting.length === 1 ? 'a number' : 'numbers'} not saved for a tenant</strong><div class="small muted">${money(waiting.reduce((x, m) => x + m.amount, 0))} in total. ${waiting.length === 1 ? 'It was' : 'These were'} not taken off anyone's rent.</div>
+        <div class="btn-row mt-s"><button class="btn primary sm" data-action="smsReviewWaiting">Choose who paid</button><button class="btn sm" data-action="smsClearWaiting">Clear</button></div></div>` : ''}
+    </section>`;
   }
 
   // One-tap amounts, so most payments need no typing at all.
@@ -2076,13 +2124,14 @@ We never sell your data or use it for adverts.</div>
     smsPay: () => smsSheet(),
     smsAutoEnable: async () => {
       if (!window.LHNative) return;
+      // Opens the phone's Notification access screen; nativeSmsSync finishes when they come back.
+      smsWantsOn = true;
       const r = await window.LHNative.enable().catch(() => ({ granted: false }));
-      if (!r.granted) { toast('Permission not given. You can still paste payment messages.'); return; }
-      lsSet(SMS_AUTO, '1'); lsSet(SMS_SINCE, String(Date.now())); // only messages from now on
-      log('Turned on automatic recording of MoMo and Airtel payment SMS');
-      save(); render(); toast('On. New MoMo and Airtel payments will be recorded by themselves.');
+      if (r.granted) nativeSmsSync();
     },
-    smsAutoOff: () => { lsSet(SMS_AUTO, null); render(); toast('Automatic payment SMS turned off'); },
+    smsAutoOff: () => { lsSet(SMS_AUTO, null); render(); toast('Automatic payments turned off'); },
+    smsReviewWaiting: () => { const w = smsWaiting(); if (w.length) { openSheet(''); smsResults(w, false); } },
+    smsClearWaiting: () => { state.smsWaiting = []; save(); render(); toast('List cleared'); },
     smsAgain: () => smsSheet(),
     addLine: (d, el) => {
       const list = el.closest('.field').querySelector('.lines');

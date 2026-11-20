@@ -1,20 +1,28 @@
 # Landlord Hub — Android app
 
 The Android app is the same Landlord Hub, wrapped with [Capacitor](https://capacitorjs.com), plus one extra:
-it **reads MTN MoMo and Airtel Money "money received" SMS and records the rent by itself**.
+it **reads the "money received" pop-ups from MTN MoMo, Airtel Money and Zamtel and takes the payment off the tenant's rent by itself**.
+
+It does **not** ask for SMS permission and never opens the messages inbox. It only sees the pop-up notifications of the phone's messages app, once the landlord turns on *Notification access* for it.
 
 ## How automatic payments work
 
 1. You add a tenant with their phone number, and any **other lines** they pay from.
-2. The tenant pays the way they already know: `*303#` (or Airtel) → Send Money → your number → amount → PIN. No reference, no code, no app needed on their side.
-3. MTN or Airtel sends **you** an SMS: *"You have received ZMW 3,000 from 0977…"*.
-4. The app reads the amount and the sender's number, finds the tenant with that line, and **takes the money off what they owe** — part payments, full payments, and extra as advance rent.
-5. A receipt is made. You see *"Rent received by MoMo / Airtel"* with a **Thank** button that sends the tenant a WhatsApp thank-you with their balance.
-6. Money from a number that isn't saved for any tenant shows under **Needs you**: you choose who paid, and that number is remembered for next time.
+2. The tenant pays the way they already know: `*303#` (or Airtel / Zamtel) → Send Money → your number → amount → PIN. No reference, no code, no app needed on their side.
+3. MTN, Airtel or Zamtel sends **you** an SMS, and your phone shows its pop-up: *"You have received ZMW 3,000 from 0977…"*.
+4. Landlord Hub sees that pop-up. It only acts when:
+   - the pop-up comes from the phone's own messages app (not any other app), and
+   - the sender is named MoMo, MTN, Airtel or Zamtel (not a phone number, so a text typed on someone's phone is ignored), and
+   - the message says money was **received**.
+5. It reads the amount and the number that sent the money. If that number is **exactly** one of a tenant's saved lines, the amount is taken off what that tenant owes (part payments, full payments, and extra as advance rent) and a receipt is made. **Nothing pops up**: you see it on the tenant's page and in the activity log.
+6. Money from a number that isn't saved for any tenant is **not** taken off anyone's rent. It waits quietly on the **More** page under *Automatic MoMo, Airtel and Zamtel payments*, where you can choose who paid (that number is then saved for next time) or clear the list.
 
-If the app is closed when the SMS arrives, you get a notification (*"K3,000 received"*), and the payment is recorded the moment you open the app.
+If the app is closed when the pop-up arrives, the payment is kept on the phone and recorded the moment the app is opened.
 
-**Only "money received" messages are read.** Every other SMS is ignored and never stored or sent anywhere. Messages from before you switched the feature on are not used, so nothing you recorded by hand is counted twice. The same payment is never recorded twice (it checks the transaction ID).
+**Things that stop a payment being picked up:**
+- If you have that MoMo / Airtel conversation open on screen when the SMS arrives, the messages app shows no pop-up, so there is nothing to read. Use *Record from a payment SMS* for that one.
+- If you have turned off notifications for the messages app, or for MoMo / Airtel in it.
+- The same payment is never recorded twice (it checks the transaction ID).
 
 ## One-time setup on this laptop
 
@@ -68,17 +76,18 @@ The app file appears in `android\app\build\outputs\apk\debug\app-debug.apk`. A c
    - **With a cable:** on the phone, turn on *Developer options → USB debugging*, plug it in, and press the green **Run ▶** button in Android Studio.
    - **As a file:** *Build → Build App Bundle(s) / APK(s) → Build APK(s)*. Send the `app-debug.apk` it makes to your phone (WhatsApp or USB) and open it. Allow "install unknown apps" when asked.
 
-4. In the app: sign in as the landlord → **More → Automatic payment SMS → Turn on** → allow **SMS** and **notifications**.
+4. In the app: sign in as the landlord → **More → Automatic MoMo, Airtel and Zamtel payments → Turn on**. The phone's **Notification access** screen opens: switch on **Landlord Hub**, confirm, and go back to the app.
+   - On Android 13 and newer, an app installed from a file may show *"Restricted setting"* instead. Go to *Settings → Apps → Landlord Hub → ⋮ (top right) → Allow restricted settings*, then try again.
 
-5. Test it: from another phone, send K1 by MoMo to the landlord's number, from a number saved as one of a tenant's lines. The payment should appear on its own.
+5. Test it: from another phone, send K1 by MoMo to the landlord's number, from a number saved as one of a tenant's lines. Don't have the MoMo conversation open. The K1 should come off that tenant's balance on its own.
 
 Every time you change the web app (`app.js`, `styles.css` …), run `npm run android:sync` again before building.
 
 ## Things to know
 
-- **Google Play:** Google only lets the phone's main SMS app use SMS permissions, so an app like this is very likely to be refused on the Play Store. Install it from the APK file instead. For the Play Store later, the safe route is the MTN MoMo / Airtel Money payment APIs.
-- **iPhone:** Apple never lets apps read SMS, so this only works on Android.
-- **Real messages:** the reader was written from the usual MTN and Airtel wording. Check it with a few real "money received" messages and adjust `LH.parseMoneySms` in `core.js` if any are missed.
+- **Google Play:** the app no longer uses SMS permissions, which Google rarely allows. Notification access is allowed, but Google will ask you to explain in the Play Console why the app needs it ("to record rent payments from mobile money notifications"). The most reliable route later is still the MTN MoMo / Airtel Money payment APIs.
+- **iPhone:** Apple never lets apps read other apps' notifications or SMS, so this only works on Android.
+- **Real messages:** the reader was written from the usual MTN, Airtel and Zamtel wording. If a real payment ends up in the "not saved" list or isn't picked up, check the sender name your messages app shows; it must contain MoMo, MTN, Airtel or Zamtel (see `TRUSTED_SENDER` in `SmsStore.java` and `app.js`). Check it with a few real "money received" messages and adjust `LH.parseMoneySms` in `core.js` if any are missed.
 - **One phone:** records are still kept on the phone. Before several landlords or caretakers share data, the app needs the shared online database.
 - **Release version:** for a signed release APK, use *Build → Generate Signed App Bundle / APK* and keep the keystore file safe — you need the same one for every update.
 
@@ -86,10 +95,10 @@ Every time you change the web app (`app.js`, `styles.css` …), run `npm run and
 
 | File | What it does |
 |---|---|
-| `native.js` | Bridge between the app and the Android SMS reader (does nothing in a browser) |
-| `android/app/src/main/java/com/voltatech/landlordhub/SmsReceiver.java` | Catches incoming SMS, keeps only "money received" ones |
-| `android/.../SmsStore.java` | Holds them until the app opens; shows the "K… received" notification |
-| `android/.../SmsReaderPlugin.java` | Asks for permission and hands messages to the app |
-| `android/app/src/main/AndroidManifest.xml` | SMS and notification permissions, the SMS receiver, Share → Landlord Hub |
+| `native.js` | Bridge between the app and the Android payment reader (does nothing in a browser) |
+| `android/app/src/main/java/com/voltatech/landlordhub/PaymentNotificationListener.java` | Sees the messages app's pop-ups, keeps only MoMo / Airtel / Zamtel "money received" ones |
+| `android/.../SmsStore.java` | Trusted sender names, and holds payments until the app opens |
+| `android/.../SmsReaderPlugin.java` | Opens the Notification access screen and hands payments to the app |
+| `android/app/src/main/AndroidManifest.xml` | The notification reader, Share → Landlord Hub |
 | `scripts/build-www.js` | Copies the web app into `www/` for Android |
 | `capacitor.config.json` | App name and ID (`com.voltatech.landlordhub`) |

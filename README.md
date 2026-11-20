@@ -16,7 +16,7 @@ No build step and no dependencies: plain HTML, CSS and JavaScript.
 
 ## Android app
 
-The Android version reads MTN MoMo and Airtel Money "money received" SMS and records rent automatically. See [ANDROID.md](ANDROID.md) to build and install it.
+The Android version reads the "money received" pop-ups from MTN MoMo, Airtel Money and Zamtel (no SMS permission) and takes each payment off the matching tenant's rent by itself. See [ANDROID.md](ANDROID.md) to build and install it.
 
 ## What's in this prototype
 
