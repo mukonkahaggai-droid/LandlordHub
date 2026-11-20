@@ -35,7 +35,8 @@ public class SmsReceiver extends BroadcastReceiver {
 
         for (Map.Entry<String, StringBuilder> e : bodies.entrySet()) {
             String body = e.getValue().toString();
-            if (!SmsStore.looksLikeMoneyIn(body)) continue;
+            // Only MTN MoMo / Airtel Money themselves. Anyone can type "You have received K3,000" from their own phone.
+            if (!SmsStore.isTrustedSender(e.getKey()) || !SmsStore.looksLikeMoneyIn(body)) continue;
             SmsStore.add(ctx, e.getKey(), body, date);
             // If the app is open, it records the payment straight away; otherwise it does so when opened.
             if (!SmsReaderPlugin.deliverLive(e.getKey(), body, date)) SmsStore.notifyPayment(ctx, body);

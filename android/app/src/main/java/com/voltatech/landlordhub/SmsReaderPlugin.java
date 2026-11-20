@@ -93,7 +93,7 @@ public class SmsReaderPlugin extends Plugin {
             if (c != null) {
                 while (c.moveToNext() && out.length() < 500) {
                     String body = c.getString(1);
-                    if (!SmsStore.looksLikeMoneyIn(body)) continue; // everything else stays private
+                    if (!SmsStore.isTrustedSender(c.getString(0)) || !SmsStore.looksLikeMoneyIn(body)) continue; // everything else stays private
                     JSObject m = new JSObject();
                     m.put("from", c.getString(0));
                     m.put("body", body);

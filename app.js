@@ -54,7 +54,7 @@
   const tenantIn = (u) => state.tenants.find((t) => t.unitId === u.id && !t.ended);
   const acct = (t) => LH.account(state, t, T());
   const first = (name) => name.split(' ')[0];
-  const initials = (name) => name.split(/\s+/).map((s) => s[0]).slice(0, 2).join('').toUpperCase();
+  const initials = (name) => String(name || '').replace(/[^\p{L}\s]/gu, '').trim().split(/\s+/).map((s) => s[0] || '').slice(0, 2).join('').toUpperCase();
   const where = (t) => { const u = unitOf(t); return `${u.label} · ${propOf(u).name}`; };
   const me = () => session.role === 'landlord' ? state.landlord
     : session.role === 'tenant' ? byId(state.tenants, session.id) : byId(state.caretakers, session.id);
@@ -622,7 +622,7 @@
       </div></section>
       </div></div>`;
   };
-  const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
+  const ordinal = (x) => { const n = Math.round(Number(x)) || 0; return n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th'); };
 
   L.properties = function () {
     const t = T();
@@ -1101,6 +1101,9 @@
     found.forEach((m) => {
       if (alreadyRecorded(m)) return dup.push(m);
       const t = tenantByLine(m.phone);
+      // Messages that didn't come straight from MTN MoMo / Airtel Money (shared from another app, or texted
+      // from an ordinary number) could be fake, so the landlord checks them first.
+      if (m.unverified) return ask.push({ m, guess: t || tenantByName(m.name) });
       if (t) {
         const p = addPayment({ tenantId: t.id, amount: m.amount, date: m.date && m.date <= iso(T()) ? m.date : iso(T()), method: LH.wallet(m.net || LH.network(state.landlord.phone)), ref: m.ref || '', by: 'landlord', byName: me().name, status: 'confirmed', smsKey: smsKey(m), fromSms: true });
         batch.push(p.id); done.push({ m, t, p });
@@ -1116,11 +1119,11 @@
     const line = (m) => `${money(m.amount)} · ${LH.wallet(m.net || LH.network(state.landlord.phone))}${m.ref ? ` · Ref ${esc(m.ref)}` : ''}`;
     setSheet(`${sheetHead(done.length ? (auto ? 'Rent received by MoMo / Airtel' : 'Payments recorded') : auto ? 'Money received' : 'Messages read')}
       ${done.length ? `<section class="sms-group"><h3>${icon('check', 'sm')}Recorded (${done.length})</h3>${auto ? '<p class="small muted">Read from your MoMo and Airtel messages and taken off what each tenant owes.</p>' : ''}<div class="list">${done.map(({ m, t, p }) => `<div class="row-wrap"><button class="row" data-action="receipt" data-id="${p.id}"><span class="tile">${icon('wallet')}</span><div class="grow"><div class="title">${esc(t.name)}</div><div class="meta">${line(m)}</div><div class="meta">From ${LH.prettyPhone(m.phone)} · receipt ${esc(p.receipt)}</div></div></button><a class="btn sm" href="${LH.waLink(t.phone, receiptMessage(t, p))}" target="_blank" rel="noopener" aria-label="Send ${esc(first(t.name))} a thank-you on WhatsApp">${icon('chat', 'sm')}Thank</a></div>`).join('')}</div></section>` : ''}
-      ${ask.length ? `<section class="sms-group"><h3>${icon('info', 'sm')}Needs you (${ask.length})</h3><p class="small muted">These numbers aren't saved for any tenant. Choose who paid; the number will be added to their lines for next time.</p>
+      ${ask.length ? `<section class="sms-group"><h3>${icon('info', 'sm')}Needs you (${ask.length})</h3>${ask.some((x) => x.m.unverified) ? `<p class="small muted"><strong>Check your MoMo or Airtel balance first.</strong> ${ask.every((x) => x.m.unverified) ? "These messages didn't" : "Some of these didn't"} come from MTN or Airtel directly, so they could be fake. Only record money you can see arrived.</p>` : ''}<p class="small muted">Choose who paid. A new number will be added to their lines for next time.</p>
         ${ask.map(({ m, guess }, i) => `<form class="card pad sms-ask" data-form="smsAssign"><input type="hidden" name="i" value="${i}">
           <div class="title" style="font-weight:700">${money(m.amount)}${m.name ? ` from ${esc(m.name)}` : ''}</div><div class="meta">${m.phone ? LH.prettyPhone(m.phone) : 'No number in the message'}${m.ref ? ` · Ref ${esc(m.ref)}` : ''}</div>
           <div class="btn-row mt-s"><select class="input" name="tenant" required style="flex:1.6"><option value="">Who paid?</option>${activeTenants().map((t) => `<option value="${t.id}" ${guess && guess.id === t.id ? 'selected' : ''}>${esc(t.name)} — ${esc(unitOf(t).label)}</option>`).join('')}</select><button class="btn primary" type="submit">Record</button></div>
-          ${guess ? `<div class="help">The name matches ${esc(guess.name)}. Check before recording.</div>` : ''}</form>`).join('')}</section>` : ''}
+          ${m.unverified ? `<div class="help">Not from MTN or Airtel directly.</div>` : guess ? `<div class="help">The name matches ${esc(guess.name)}. Check before recording.</div>` : ''}</form>`).join('')}</section>` : ''}
       ${dup.length ? `<p class="small muted mt">${dup.length} message${dup.length === 1 ? ' was' : 's were'} already recorded, so ${dup.length === 1 ? 'it was' : 'they were'} skipped.</p>` : ''}
       ${!found.length ? `<div class="empty">No money received was found in what you pasted. Paste the whole message from MTN MoMo or Airtel Money, including the amount.</div>` : ''}
       <div class="btn-row mt"><button class="btn" data-action="smsAgain">Paste more</button><button class="btn primary" data-action="closeSheet">Done</button></div>`);
@@ -1134,6 +1137,10 @@
   const SMS_AUTO = 'landlordhub.smsauto', SMS_SINCE = 'landlordhub.smssince';
   const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
   const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} };
+  // Real payment SMS come from a sender name such as "MoMo" or "AirtelMoney", never a phone number.
+  // Keep in step with TRUSTED_SENDER in android/.../SmsStore.java.
+  const TRUSTED_SENDER = /momo|mtn|airtel/i;
+  const trustedSender = (from) => /[a-z]/i.test(String(from || '')) && TRUSTED_SENDER.test(String(from || ''));
   const smsAutoOn = () => !!window.LHNative && lsGet(SMS_AUTO) === '1';
   let smsSyncing = false;
   async function nativeSmsSync(live) {
@@ -1152,8 +1159,10 @@
       msgs.forEach((x) => {
         if (x.date && x.date < since) return; // from before it was switched on
         newest = Math.max(newest, Number(x.date) || 0);
+        const unverified = !trustedSender(x.from);
         LH.parseMoneySms(x.body).forEach((m) => {
           if (!m.date && x.date) m.date = iso(new Date(Number(x.date)));
+          if (unverified) m.unverified = true;
           if (!found.some((f) => smsKey(f) === smsKey(m))) found.push(m);
         });
       });
@@ -1571,10 +1580,20 @@
   }
   // The long link carries everything itself; used only when the laptop server can't make a short one.
   const longInviteLink = (t) => `${location.origin}${location.pathname}#/join/${b64u(JSON.stringify(inviteData(t)))}`;
+  // A random value kept on this phone; the laptop server only lets this phone change the invites it made.
+  function inviteSecret() {
+    let v = lsGet('landlordhub.invitesecret');
+    if (!v || !/^[A-Za-z0-9_-]{16,64}$/.test(v)) {
+      const b = new Uint8Array(24); crypto.getRandomValues(b);
+      v = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+      lsSet('landlordhub.invitesecret', v);
+    }
+    return v;
+  }
   // Short link, e.g. http://192.168.1.177:5173/j/7KQ2MD — the server keeps the details behind the code.
   async function shortInviteLink(t) {
     try {
-      const r = await fetch('api/invites', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: t.id, data: inviteData(t) }) });
+      const r = await fetch('api/invites', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: t.id, secret: inviteSecret(), data: inviteData(t) }) });
       if (!r.ok) throw new Error(r.status);
       const { code } = await r.json();
       return `${location.origin}/j/${code}`;
@@ -1620,9 +1639,30 @@
     return `<div class="auth"><div class="auth-box">${brand}<h1>Opening your invite…</h1><p class="lede">One moment.</p></div></div>`;
   }
 
+  /* An invite link can be made by anyone, so nothing in it is trusted: every field is checked and
+     rebuilt here, and anything that doesn't look right makes the whole link invalid. */
+  function cleanInvite(d) {
+    if (!d || typeof d !== 'object' || !d.t || !d.u || !d.p || !d.l) return null;
+    const { t, u, p, l } = d;
+    const ID = /^[A-Za-z0-9_-]{1,40}$/;
+    const text = (v, max = 80) => String(v ?? '').replace(/[<>"&`]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+    const num = (v, min, max) => { const x = Number(v); return typeof v !== 'boolean' && v !== '' && v != null && Number.isFinite(x) && x >= min && x <= max ? x : null; };
+    if (![t.id, u.id, p.id].every((x) => ID.test(String(x)))) return null;
+    const phone = LH.cleanPhone(t.phone), rent = num(u.rent, 0, 10000000), dueDay = num(t.dueDay, 1, 31);
+    if (phone.length !== 10 || rent == null || dueDay == null) return null;
+    return {
+      c: String(d.c || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12),
+      t: { id: t.id, name: text(t.name) || 'Tenant', phone, unitId: u.id, since: /^\d{4}-\d{2}-\d{2}$/.test(t.since) ? t.since : iso(T()), dueDay: Math.round(dueDay), every: Math.round(num(t.every, 1, 12) || 1), deposit: num(t.deposit, 0, 10000000) || 0, lang: ['en', 'bem', 'nya'].includes(t.lang) ? t.lang : 'en' },
+      u: { id: u.id, label: text(u.label) || 'Home', rent, period: u.period === 'term' ? 'term' : 'month', service: num(u.service, 0, 10000000) || 0, serviceName: text(u.serviceName), propertyId: p.id },
+      p: { id: p.id, name: text(p.name) || 'Property', area: text(p.area), kind: ['flats', 'boarding', 'house'].includes(p.kind) ? p.kind : 'flats' },
+      l: { name: text(l.name) || 'Your landlord', phone: LH.cleanPhone(l.phone), business: text(l.business) },
+    };
+  }
+
   function joinView(code, pre) {
     let d = pre || null;
     if (!d) { try { d = JSON.parse(unb64u(code)); } catch (e) { d = null; } }
+    d = cleanInvite(d);
     const brand = `<div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div>`;
     if (!d || !d.t || !d.l) {
       return `<div class="auth"><div class="auth-box">${brand}<h1>This link doesn't work</h1><p class="lede">It may have been cut off when it was copied. Ask your landlord to send it again.</p><a class="btn primary block lg" href="#/home">Go to Landlord Hub</a></div></div>`;

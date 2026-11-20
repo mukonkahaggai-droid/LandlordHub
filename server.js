@@ -25,26 +25,35 @@ function newCode(all) {
     if (!all[code]) return code;
   }
 }
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
 }
 
 http.createServer((req, res) => {
-  const urlPath = decodeURIComponent(req.url.split('?')[0]);
+  let urlPath;
+  try { urlPath = decodeURIComponent(req.url.split('?')[0]); } catch (e) { res.writeHead(400); return res.end('Bad request'); }
 
-  // Create (or reuse) a short code for an invite: POST /api/invites  { key, data }
+  // Create (or reuse) a short code for an invite: POST /api/invites  { key, secret, data }
+  // `secret` is a random value kept on the landlord's phone. Only the phone that made an invite can
+  // update it, so someone else on the Wi-Fi can't swap a tenant's invite for their own details.
   if (urlPath === '/api/invites' && req.method === 'POST') {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 20000) req.destroy(); });
     req.on('end', () => {
       let msg; try { msg = JSON.parse(body); } catch (e) { return sendJson(res, 400, { error: 'Bad request' }); }
-      if (!msg || typeof msg.data !== 'object') return sendJson(res, 400, { error: 'Bad request' });
+      if (!msg || !msg.data || typeof msg.data !== 'object' || Array.isArray(msg.data)) return sendJson(res, 400, { error: 'Bad request' });
+      const key = String(msg.key || '').slice(0, 40), secret = String(msg.secret || '');
+      if (!/^[A-Za-z0-9_-]{16,64}$/.test(secret)) return sendJson(res, 400, { error: 'Bad request' });
       const all = readInvites();
-      // The same tenant keeps the same code; their details are refreshed.
-      let code = Object.keys(all).find((k) => msg.key && all[k].key === msg.key);
+      // The same tenant keeps the same code (their details are refreshed), but only for the phone that made it.
+      let code = Object.keys(all).find((k) => key && all[k].key === key && all[k].secret && safeEqual(all[k].secret, secret));
       if (!code) code = newCode(all);
-      all[code] = { key: String(msg.key || ''), data: msg.data, at: new Date().toISOString() };
+      all[code] = { key, secret, data: msg.data, at: new Date().toISOString() };
       writeInvites(all);
       sendJson(res, 200, { code });
     });
@@ -62,10 +71,11 @@ http.createServer((req, res) => {
   if (j) { res.writeHead(302, { Location: `/#/j/${j[1].toUpperCase()}` }); return res.end(); }
 
   // Never serve saved data or the server's own files.
-  if (/^\/(data|node_modules|android|www|scripts)\//.test(urlPath) || urlPath === '/server.js') { res.writeHead(404); return res.end('Not found'); }
+  // Hidden files and folders (.git, .claude …) are never served either.
+  if (/^\/(data|node_modules|android|www|scripts)(\/|$)/.test(urlPath) || /(^|\/)\./.test(urlPath) || urlPath === '/server.js') { res.writeHead(404); return res.end('Not found'); }
 
   const file = path.normalize(path.join(root, urlPath === '/' ? 'index.html' : urlPath));
-  if (!file.startsWith(root)) { res.writeHead(403); return res.end(); }
+  if (!file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     const type = types[path.extname(file)] || 'application/octet-stream';

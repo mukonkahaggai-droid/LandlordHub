@@ -45,7 +45,8 @@
     return null;
   };
   LH.wallet = (net) => ({ MTN: 'MTN MoMo', Airtel: 'Airtel Money', Zamtel: 'Zamtel Kwacha' }[net] || 'Mobile money');
-  LH.prettyPhone = (p) => { const d = LH.cleanPhone(p); return d.length === 10 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : p; };
+  // Only digits ever come out, so it is safe to put straight into the page.
+  LH.prettyPhone = (p) => { const d = LH.cleanPhone(p); return d.length === 10 ? `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}` : d; };
   LH.intl = (p) => '260' + LH.cleanPhone(p).slice(1);
   LH.waLink = (p, text) => (p ? `https://wa.me/${LH.intl(p)}` : 'https://wa.me/') + `?text=${encodeURIComponent(text)}`;
   LH.smsLink = (p, text) => `sms:+${LH.intl(p)}?body=${encodeURIComponent(text)}`;

@@ -19,10 +19,11 @@ public class MainActivity extends BridgeActivity {
         takeShared(intent);
     }
 
-    /** "Share → Landlord Hub" on a payment SMS: keep it so the app records it. */
+    /** "Share → Landlord Hub" on a payment SMS: keep it for the landlord to check.
+     *  Any app can share text here, so it is marked "shared" and never recorded without the landlord confirming. */
     private void takeShared(Intent intent) {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
         String text = intent.getStringExtra(Intent.EXTRA_TEXT);
-        if (text != null && SmsStore.looksLikeMoneyIn(text)) SmsStore.add(this, "", text, System.currentTimeMillis());
+        if (text != null && SmsStore.looksLikeMoneyIn(text)) SmsStore.add(this, "shared", text, System.currentTimeMillis());
     }
 }

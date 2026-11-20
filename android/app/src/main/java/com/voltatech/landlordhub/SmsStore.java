@@ -37,7 +37,21 @@ final class SmsStore {
     private static final Pattern AMOUNT = Pattern.compile("(?i)(ZMW|ZK|K)\\s?([0-9][0-9,]*(\\.[0-9]{1,2})?)");
     private static final Pattern SENT = Pattern.compile("(?i)\\b(you have sent|sent to|you paid|payment to|withdraw|airtime|bundle)\\b");
 
+    // Who real "money received" SMS come from. They use a name (e.g. "MoMo", "AirtelMoney"),
+    // never a phone number, so a text typed on someone's phone is never trusted.
+    // If real payment SMS stop being picked up, check the sender name in Messages and add it here
+    // (and to TRUSTED_SENDER in app.js).
+    private static final Pattern TRUSTED_SENDER = Pattern.compile("(?i)(momo|mtn|airtel)");
+
     private SmsStore() {}
+
+    static boolean isTrustedSender(String from) {
+        if (from == null) return false;
+        String f = from.trim();
+        // A phone number (digits, +, spaces) can be anyone.
+        if (!f.matches(".*[A-Za-z].*")) return false;
+        return TRUSTED_SENDER.matcher(f).find();
+    }
 
     static boolean looksLikeMoneyIn(String body) {
         if (body == null) return false;
