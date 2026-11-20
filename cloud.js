@@ -77,9 +77,17 @@
     ready: true,
     sendCode: function (phone) {
       if (navigator.onLine === false) return Promise.reject(Object.assign(new Error('You need internet to get a sign-in code. Connect and try again.'), { code: 'offline' }));
-      return auth.signInWithPhoneNumber(intl(phone), getVerifier())
-        .then(function (c) { pending = c; })
-        .catch(function (err) { resetVerifier(); throw friendly(err); });
+      // If Google's picture check is closed or left unfinished, Firebase never answers, so give up
+      // after two minutes and let the person try again instead of waiting forever.
+      var timer;
+      var giveUp = new Promise(function (_, reject) {
+        timer = setTimeout(function () {
+          reject(Object.assign(new Error('The picture check wasn\'t finished, so no code was sent. Tap “Send me a code” to try again.'), { code: 'timeout' }));
+        }, 120000);
+      });
+      return Promise.race([auth.signInWithPhoneNumber(intl(phone), getVerifier()), giveUp])
+        .then(function (c) { clearTimeout(timer); pending = c; })
+        .catch(function (err) { clearTimeout(timer); resetVerifier(); throw err && err.code === 'timeout' ? err : friendly(err); });
     },
     confirmCode: function (code) {
       if (!pending) return Promise.reject(Object.assign(new Error('Ask for a new code first.'), { code: 'no-pending' }));

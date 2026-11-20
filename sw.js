@@ -1,6 +1,6 @@
 ﻿/* Offline support: the whole app shell is cached on first visit,
    so Landlord Hub opens during load-shedding or with no data bundle. */
-const CACHE = 'landlordhub-v25';
+const CACHE = 'landlordhub-v26';
 const SHELL = ['./', 'index.html', 'styles.css', 'native.js', 'vendor/firebase/firebase-app-compat.js', 'vendor/firebase/firebase-auth-compat.js', 'firebase-config.js', 'cloud.js', 'core.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-maskable.svg', 'icons/logo.webp'];
 
 self.addEventListener('install', (e) => {

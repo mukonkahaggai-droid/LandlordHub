@@ -1957,6 +1957,7 @@ We never sell your data or use it for adverts.</div>
       <form data-form="phone">
         <label class="field"><span class="label">Your phone number</span><div class="input-group"><span class="prefix">+260</span><input class="input" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="96 123 4567" value="${esc(s.phone ? LH.cleanPhone(s.phone).slice(1) : '')}"></div></label>
         <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? 'Sending your code…' : 'Send me a code'}</button>
+        ${s.busy ? '<p class="small muted mt-s" role="status">Google may ask you to pick some pictures to check you\'re not a robot. Finish that and tap <strong>Verify</strong>, and your code will be sent.</p>' : ''}
       </form>
       <div class="divider">or explore the demo as</div>
       <div class="demo-roles">
