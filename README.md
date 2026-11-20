@@ -48,7 +48,7 @@ The Android version reads the "money received" pop-ups from MTN MoMo, Airtel Mon
 ## Not real yet (needs a backend)
 
 - Data is stored in the browser (`localStorage`); there is no server, sync or multi-device login
-- OTP, PIN and fingerprint sign-in are simulated
+- Sign-in with a phone number and SMS code uses Firebase (project `landlord-hub-volta`, Zambian numbers only, a test number for development). The PIN and fingerprint step is still simulated, and records still live on each device until they move online
 - MTN MoMo / Airtel Money payments are simulated; the real flow needs the Collections API and Airtel Open API with callbacks
 - WhatsApp/SMS reminders open WhatsApp or the SMS app with the message filled in; automatic sending needs WhatsApp Business API and an SMS gateway
 - Bemba and Nyanja wording, the privacy notice and the ZRA tax estimate are drafts to be checked by a native speaker, a lawyer and ZRA respectively

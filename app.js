@@ -1931,12 +1931,14 @@ We never sell your data or use it for adverts.</div>
     const brand = `<div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div>`;
     if (s.step === 'otp') {
       return `<div class="auth"><div class="auth-box">${brand}
-        <h1>Enter your code</h1><p class="lede">In the live app, a 6-digit code is sent by SMS and WhatsApp to <strong>+260 ${esc(LH.prettyPhone(s.phone).slice(1))}</strong>.</p>
-        <div class="banner warn" style="margin:0 0 18px">${icon('info', 'sm')}<span><strong>Demo mode: no SMS is sent.</strong> Use this code: <strong class="num" style="letter-spacing:.12em">${esc(s.code)}</strong></span></div>
+        ${s.cloud
+          ? `<h1>Enter your code</h1><p class="lede">We sent a 6-digit code by SMS to <strong>+260 ${esc(LH.prettyPhone(s.phone).slice(1))}</strong>. It can take a minute to arrive.</p>`
+          : `<h1>Enter your code</h1><p class="lede">In the live app, a 6-digit code is sent by SMS to <strong>+260 ${esc(LH.prettyPhone(s.phone).slice(1))}</strong>.</p>
+        <div class="banner warn" style="margin:0 0 18px">${icon('info', 'sm')}<span><strong>Demo mode: no SMS is sent.</strong> Use this code: <strong class="num" style="letter-spacing:.12em">${esc(s.code)}</strong></span></div>`}
         <form data-form="otp">
           <label class="field"><span class="sr">One-time code</span><input class="input otp" name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required autofocus placeholder="••••••"></label>
           <label class="check" style="margin:4px 0 18px"><input type="checkbox" name="consent" required><span class="small">I agree to Landlord Hub keeping my name, phone and rent records to manage my tenancy, as set out in the <a href="#" data-action="showPrivacy">privacy notice</a>.</span></label>
-          <button class="btn primary block lg" type="submit">Continue</button>
+          <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? 'Checking…' : 'Continue'}</button>
           <button class="btn ghost block mt-s" type="button" data-action="loginBack">Use a different number</button>
         </form></div></div>`;
     }
@@ -1954,7 +1956,7 @@ We never sell your data or use it for adverts.</div>
       <p class="lede">Track every house, tenant and kwacha. Tenants pay with MTN MoMo or Airtel Money and get a receipt straight away.</p>
       <form data-form="phone">
         <label class="field"><span class="label">Your phone number</span><div class="input-group"><span class="prefix">+260</span><input class="input" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="96 123 4567" value="${esc(s.phone ? LH.cleanPhone(s.phone).slice(1) : '')}"></div></label>
-        <button class="btn primary block lg" type="submit">Send me a code</button>
+        <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? 'Sending your code…' : 'Send me a code'}</button>
       </form>
       <div class="divider">or explore the demo as</div>
       <div class="demo-roles">
@@ -2104,7 +2106,7 @@ We never sell your data or use it for adverts.</div>
       if (!d.keep) { session = null; saveSession(); ui.login = { step: 'phone', phone: '' }; }
       closeSheet(); render(); toast('Demo data reset');
     },
-    logout: () => { session = null; saveSession(); ui.login = { step: 'phone', phone: '' }; location.hash = ''; render(); },
+    logout: () => { if (session && session.uid && window.LHCloud && window.LHCloud.ready) window.LHCloud.signOut(); session = null; saveSession(); ui.login = { step: 'phone', phone: '' }; location.hash = ''; render(); },
     loginBack: () => { ui.login.step = 'phone'; render(); },
     skipPin: () => finishLogin(),
     pay: () => paySheet(),
@@ -2168,20 +2170,43 @@ We never sell your data or use it for adverts.</div>
     const t = state.tenants.find((x) => x.phone === ph && !x.ended);
     const c = state.caretakers.find((x) => x.phone === ph);
     session = t ? { role: 'tenant', id: t.id } : c ? { role: 'caretaker', id: c.id } : { role: 'landlord', id: 'L1' };
+    if (ui.login.uid) { session.uid = ui.login.uid; session.phone = ph; } // signed in online (Firebase)
     saveSession(); ui.login = { step: 'phone', phone: '' }; location.hash = '#/home'; render();
     toast(`Signed in as ${me().name.split(' ')[0]}`);
   }
 
   /* ---------- Forms ---------- */
   const forms = {
-    phone: (f) => {
+    phone: async (f) => {
       const ph = LH.cleanPhone(f.get('phone'));
       if (ph.length !== 10) return toast('Enter a 9-digit Zambian number, like 96 123 4567');
-      ui.login = { step: 'otp', phone: ph, code: String(Math.floor(100000 + Math.random() * 900000)) }; render();
+      if (ui.login.busy) return;
+      // Without Firebase (it failed to load), fall back to the on-screen demo code.
+      if (!window.LHCloud || !window.LHCloud.ready) {
+        ui.login = { step: 'otp', phone: ph, code: String(Math.floor(100000 + Math.random() * 900000)) }; return render();
+      }
+      ui.login = { step: 'phone', phone: ph, busy: true }; render();
+      try {
+        await window.LHCloud.sendCode(ph);
+        ui.login = { step: 'otp', phone: ph, cloud: true }; render();
+      } catch (e) {
+        ui.login = { step: 'phone', phone: ph }; render(); toast(e.message);
+      }
     },
-    otp: (f) => {
-      if (String(f.get('otp')).trim() !== ui.login.code) return toast("That code doesn't match. Check it and try again.");
-      ui.login.step = 'pin'; render();
+    otp: async (f) => {
+      const code = String(f.get('otp')).trim();
+      if (!ui.login.cloud) {
+        if (code !== ui.login.code) return toast("That code doesn't match. Check it and try again.");
+        ui.login.step = 'pin'; return render();
+      }
+      if (ui.login.busy) return;
+      ui.login.busy = true; render();
+      try {
+        const u = await window.LHCloud.confirmCode(code);
+        ui.login = { ...ui.login, busy: false, step: 'pin', uid: u.uid }; render();
+      } catch (e) {
+        ui.login.busy = false; render(); toast(e.message);
+      }
     },
     pin: () => finishLogin(),
     recordPayment: (f) => {
