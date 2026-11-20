@@ -52,4 +52,3 @@ The Android version reads the "money received" pop-ups from MTN MoMo, Airtel Mon
 - MTN MoMo / Airtel Money payments are simulated; the real flow needs the Collections API and Airtel Open API with callbacks
 - WhatsApp/SMS reminders open WhatsApp or the SMS app with the message filled in; automatic sending needs WhatsApp Business API and an SMS gateway
 - Bemba and Nyanja wording, the privacy notice and the ZRA tax estimate are drafts to be checked by a native speaker, a lawyer and ZRA respectively
-- Add 192px and 512px PNG icons before publishing to the Play Store
