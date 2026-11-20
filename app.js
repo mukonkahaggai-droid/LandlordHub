@@ -23,11 +23,23 @@
         .split('Banda Properties').join('Mukonka Properties'));
       save();
     }
+    // Landlord Hub keeps no ID numbers (NRC, passport, TPIN): wipe any that older versions saved.
+    if (stripIds(state)) save();
     // Deductions were added later: give older saved data a sample history too.
     if (!Array.isArray(state.deductions)) { state.deductions = LH.seedDeductions(state, LH.today()); save(); }
     try { session = JSON.parse(localStorage.getItem(SKEY)); } catch (e) { session = null; }
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage full or blocked */ } }
+  // Names and phone numbers only: no NRC, passport or TPIN anywhere. Returns true if it removed something.
+  function stripIds(st) {
+    const ID_FIELDS = ['nrc', 'nrcVerified', 'passport', 'tpin'];
+    let removed = false;
+    const clean = (o) => { if (o) ID_FIELDS.forEach((k) => { if (k in o) { delete o[k]; removed = true; } }); };
+    clean(st.landlord);
+    (st.tenants || []).forEach(clean);
+    (st.caretakers || []).forEach(clean);
+    return removed;
+  }
 
   /* Text size: normal by default; older readers can choose Large or Extra large in More / Account. */
   const TS_KEY = 'landlordhub.textsize';
@@ -915,13 +927,11 @@
   L.privacy = function () { return privacyView('more'); };
   function privacyView(back) {
     const w = me(), role = session.role;
-    const mask = (s) => s ? s.replace(/^(\d{2})\d+/, '$1••••') : '—';
     return `${head('Account & privacy', { back })}
       <div class="card pad" style="display:flex;gap:14px;align-items:center"><span class="avatar lg">${initials(w.name)}</span><div><div style="font-weight:650;font-size:17px">${esc(w.name)}</div><div class="small muted">${LH.prettyPhone(w.phone)}${w.email ? ' · ' + esc(w.email) : ''}</div></div></div>
       ${role === 'landlord' ? `<section class="section"><div class="list">
-        <div class="row static"><span class="tile neutral">${icon('shield')}</span><div class="grow"><div class="title">NRC ${mask(w.nrc)}</div><div class="meta">Verified for payouts · stored encrypted</div></div><span class="pill paid">Verified</span></div>
         <div class="row static"><span class="tile neutral">${icon('wallet')}</span><div class="grow"><div class="title">Payout wallet</div><div class="meta">${LH.wallet(LH.network(w.payout))} · ${LH.prettyPhone(w.payout)}</div></div></div>
-        <div class="row static"><span class="tile neutral">${icon('building')}</span><div class="grow"><div class="title">${esc(w.business || 'No business name')}</div><div class="meta">TPIN ${w.tpin ? esc(w.tpin) : 'not added (optional)'}</div></div></div>
+        <div class="row static"><span class="tile neutral">${icon('building')}</span><div class="grow"><div class="title">${esc(w.business || 'No business name')}</div><div class="meta">Business name on your receipts</div></div></div>
       </div></section>` : ''}
       <section class="section"><div class="section-head"><h2>Signing in</h2></div><div class="list">
         <div class="row static"><span class="tile neutral">${icon('phone')}</span><div class="grow"><div class="title">Phone number and one-time code</div><div class="meta">No password to remember</div></div></div>
@@ -932,7 +942,7 @@
         <button class="row" data-action="exportMine"><span class="tile neutral">${icon('download')}</span><div class="grow"><div class="title">Download my data</div><div class="meta">A copy of everything we hold about you</div></div></button>
         <button class="row" data-action="deleteMe"><span class="tile neutral" style="color:var(--overdue)">${icon('x')}</span><div class="grow"><div class="title" style="color:var(--overdue)">Delete my account</div><div class="meta">Rent records the law requires us to keep are kept, everything else is erased</div></div></button>
       </div></section>
-      <div class="small faint mt" style="padding:0 2px">Personal data is stored on servers in Zambia, in line with the Data Protection Act, 2021.</div>`;
+      <div class="small faint mt" style="padding:0 2px">Landlord Hub keeps only names, phone numbers and rent records. It never asks for an NRC, passport or TPIN.</div>`;
   }
 
   /* =====================================================================
@@ -1421,7 +1431,7 @@
           <div class="r-title"><div class="r-kicker">Official receipt</div><div class="r-no num">${esc(p.receipt || '—')}</div><div class="r-date">${fmtDate(parse(p.date))}</div></div>
         </header>
         <div class="r-parties">
-          <div><div class="r-cap">Issued by</div><div class="r-strong">${esc(L0.business || L0.name)}</div><div>${esc(L0.name)}</div><div class="num">${LH.prettyPhone(L0.phone)}</div>${L0.tpin ? `<div class="num">TPIN ${esc(L0.tpin)}</div>` : ''}</div>
+          <div><div class="r-cap">Issued by</div><div class="r-strong">${esc(L0.business || L0.name)}</div><div>${esc(L0.name)}</div><div class="num">${LH.prettyPhone(L0.phone)}</div></div>
           <div><div class="r-cap">Received from</div><div class="r-strong">${esc(t.name)}</div><div>${esc(u.label)}, ${esc(prop.name)}</div>${prop.area ? `<div>${esc(prop.area)}</div>` : ''}<div class="num">${LH.prettyPhone(t.phone)}</div></div>
         </div>
         <div class="r-amount-box">
@@ -1601,7 +1611,6 @@
           <label class="field" style="flex:1"><span class="label">Deposit</span><div class="input-group"><span class="prefix">K</span><input class="input" name="deposit" type="number" inputmode="decimal" min="0" value="${editing ? t.deposit || 0 : 0}"></div></label>
           <label class="field" style="flex:1"><span class="label">Reminder language</span><select class="input" name="lang">${Object.entries(LH.LANGS).map(([k, v]) => `<option value="${k}" ${editing && t.lang === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
         </div>
-        <label class="field"><span class="label">NRC number <span class="faint" style="font-weight:400">(optional)</span></span><input class="input" name="nrc" placeholder="${editing && t.nrc ? 'Saved. Type a new one to replace it' : 'Only if you need it for the lease'}"><div class="help">Stored encrypted. Only you can see it.</div></label>
         <button class="btn primary block lg" type="submit" ${units.length ? '' : 'disabled'}>${editing ? 'Save changes' : 'Add tenant'}</button>
       </form>`);
   }
@@ -1908,13 +1917,15 @@
       <div class="prose small">Landlord Hub keeps only what is needed to manage rent.
 
 <strong>What we collect</strong>
-• Landlords: name, phone, optional email, NRC or passport number (to verify payouts), payout wallet, optional business name and TPIN.
-• Tenants: name, phone and house or room, added by your landlord. NRC only if your landlord needs it for the lease.
+• Landlords: name, phone, optional email, the mobile money number rent is paid to, and an optional business name.
+• Tenants: name, phone and house or room, added by your landlord.
 • Caretakers: name and phone.
 • Payment records and receipts.
 
+We never ask for an NRC, passport, TPIN or any other ID number.
+
 <strong>How we protect it</strong>
-Data is stored on servers in Zambia. NRCs and documents are encrypted. Each person only sees what their role allows, and every change is logged.
+Your records are kept on your phone. When online sync is switched on, they are also stored with Google Firebase in Johannesburg, South Africa. Each person only sees what their role allows, and every change is logged.
 
 <strong>Your rights</strong>
 You can view, download or delete your data at any time from Account & privacy. If a data breach happens we report it to the Data Protection Commissioner within 24 hours.
@@ -2270,7 +2281,7 @@ We never sell your data or use it for adverts.</div>
       if (!(every >= 1 && every <= 24)) return toast('Payment period must be from 1 to 24 months');
       const unitId = resolvePlace(f.get('unit'));
       if (!unitId) return toast('That house is full. Choose another house or add bed spaces.');
-      const t = { id: LH.uid('t'), name: f.get('name').trim(), phone, lines: readLines(f, phone), unitId, since: f.get('since'), dueDay, every, deposit: Number(f.get('deposit')) || 0, lang: f.get('lang'), nrc: (f.get('nrc') || '').trim() ? 'encrypted' : '' };
+      const t = { id: LH.uid('t'), name: f.get('name').trim(), phone, lines: readLines(f, phone), unitId, since: f.get('since'), dueDay, every, deposit: Number(f.get('deposit')) || 0, lang: f.get('lang') };
       state.tenants.push(t);
       inviteData(t); // creates their personal invite
       log(`Added ${t.name} to ${unitOf(t).label}, ${propOf(unitOf(t)).name}`);
@@ -2289,7 +2300,6 @@ We never sell your data or use it for adverts.</div>
       const every = Math.round(Number(f.get('every')) || 1);
       if (!(every >= 1 && every <= 24)) return toast('Payment period must be from 1 to 24 months');
       Object.assign(t, { name: f.get('name').trim(), phone, lines: readLines(f, phone), unitId, since: f.get('since'), dueDay, every, deposit: Number(f.get('deposit')) || 0, lang: f.get('lang') });
-      if ((f.get('nrc') || '').trim()) t.nrc = 'encrypted';
       log(`Updated ${t.name}'s details${moved ? `, now in ${unitOf(t).label}` : ''}`);
       save(); closeSheet(); render(); toast('Changes saved');
     },

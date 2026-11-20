@@ -223,8 +223,8 @@
       version: 1,
       landlord: {
         id: 'L1', name: 'Haggai Mukonka', phone: '0966123456', email: 'haggai.mukonka@example.com',
-        business: 'Mukonka Properties', nrc: '204518/10/1', nrcVerified: true,
-        payout: '0966123456', tpin: '', joined: mo(30),
+        business: 'Mukonka Properties',
+        payout: '0966123456', joined: mo(30),
       },
       caretakers: [
         { id: 'C1', name: 'Esther Mumba', phone: '0977345120', propertyIds: ['P1', 'P2'], since: mo(10) },

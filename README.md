@@ -29,7 +29,7 @@ The Android version reads the "money received" pop-ups from MTN MoMo, Airtel Mon
 - Notices with templates: water/power, rent increase, late payment, notice to vacate
 - Repairs, caretakers (limited permissions), automatic reminder schedule, activity log
 - Reports: income by month and property, ZRA rental income estimate, CSV export, weekly WhatsApp summary
-- Account & privacy: verified NRC (masked), payout wallet, export or delete data
+- Account & privacy: payout wallet, export or delete data. No NRC, passport or TPIN is ever asked for or stored
 
 **Tenant**: balance and due date, Pay button (detects MTN / Airtel from the number and simulates the PIN prompt), "I paid another way" with proof, receipts, notices, repair requests.
 

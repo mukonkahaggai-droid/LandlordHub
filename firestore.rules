@@ -1,0 +1,162 @@
+rules_version = '2';
+
+// Landlord Hub — who can see and change what. Google's servers enforce these rules, so changing the
+// app on a phone can't get around them. Tested in tests/rules.test.js (npm run test:rules).
+//
+// Layout (see docs/DATABASE.md):
+//   landlords/{landlordId}                 landlordId = the landlord's sign-in account id (uid)
+//     members/{phone}                      +260… → { phone, role: tenant|caretaker, refId, propertyId?, unitId?, propertyIds? }
+//     properties/{id}  units/{id}  tenants/{id}  caretakers/{id}
+//     payments/{id}  notices/{id}  requests/{id}  activity/{id}  deductions/{id}
+//     private/settings                     reminders and other landlord-only settings
+//     counters/receipts                    { next } for receipt numbers
+//
+// Landlord Hub keeps names and phone numbers only. It never collects NRC, passport or TPIN numbers,
+// and as a backstop these rules refuse any record that contains one.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Who is asking ----------
+    function signedIn() { return request.auth != null; }
+    function myPhone() { return request.auth.token.get('phone_number', ''); }
+    function isLandlord(lid) { return signedIn() && request.auth.uid == lid; }
+
+    function memberPath(lid) { return /databases/$(database)/documents/landlords/$(lid)/members/$(myPhone()); }
+    function isMember(lid) { return signedIn() && myPhone() != '' && exists(memberPath(lid)); }
+    function member(lid) { return get(memberPath(lid)).data; }
+
+    function isTenant(lid) { return isMember(lid) && member(lid).role == 'tenant'; }
+    function isCaretaker(lid) { return isMember(lid) && member(lid).role == 'caretaker'; }
+    function caretakerHas(lid, pid) { return isCaretaker(lid) && pid in member(lid).propertyIds; }
+
+    // ---------- Checks on what is written ----------
+    function isAmount(v) { return v is number && v > 0 && v < 100000000; }
+    function noSecrets(d) { return !('nrc' in d) && !('tpin' in d) && !('passport' in d) && !('nrcVerified' in d); }
+
+    // A tenant or caretaker finds the landlords they belong to by their own phone number.
+    match /{path=**}/members/{phone} {
+      allow read: if signedIn() && myPhone() != '' && resource.data.phone == myPhone();
+    }
+
+    match /landlords/{lid} {
+      // The landlord's own profile. Tenants and caretakers can see it (name, phone, business),
+      // because their screens show who their landlord is.
+      allow read: if isLandlord(lid) || isMember(lid);
+      allow create, update: if isLandlord(lid) && noSecrets(request.resource.data)
+        && request.resource.data.phone == myPhone();
+      allow delete: if isLandlord(lid);
+
+      match /members/{phone} {
+        allow read: if isLandlord(lid) || (signedIn() && phone == myPhone());
+        allow write: if isLandlord(lid) && (request.method == 'delete'
+          || (request.resource.data.phone == phone && request.resource.data.role in ['tenant', 'caretaker']));
+      }
+
+      match /properties/{pid} {
+        allow read: if isLandlord(lid) || caretakerHas(lid, pid)
+          || (isTenant(lid) && member(lid).propertyId == pid);
+        allow write: if isLandlord(lid);
+      }
+
+      match /units/{uid} {
+        allow read: if isLandlord(lid) || caretakerHas(lid, resource.data.propertyId)
+          || (isTenant(lid) && member(lid).unitId == uid);
+        allow write: if isLandlord(lid);
+      }
+
+      match /tenants/{tid} {
+        allow read: if isLandlord(lid) || caretakerHas(lid, resource.data.propertyId)
+          || (isTenant(lid) && member(lid).refId == tid);
+        allow write: if isLandlord(lid) && noSecrets(request.resource.data);
+        allow delete: if isLandlord(lid);
+      }
+
+      match /caretakers/{cid} {
+        allow read: if isLandlord(lid) || (isCaretaker(lid) && member(lid).refId == cid);
+        allow write: if isLandlord(lid);
+      }
+
+      match /payments/{payid} {
+        allow read: if isLandlord(lid)
+          || caretakerHas(lid, resource.data.propertyId)
+          || (isTenant(lid) && resource.data.tenantId == member(lid).refId);
+
+        allow create: if isLandlord(lid) && isAmount(request.resource.data.amount)
+          // A tenant reports a payment ("I paid another way"); the landlord confirms it later.
+          || (isTenant(lid)
+              && request.resource.data.tenantId == member(lid).refId
+              && request.resource.data.propertyId == member(lid).propertyId
+              && request.resource.data.status == 'pending'
+              && request.resource.data.by == 'tenant'
+              && isAmount(request.resource.data.amount)
+              && !('receipt' in request.resource.data))
+          // A caretaker records cash for a tenant in one of their properties; a receipt is made at once.
+          || (caretakerHas(lid, request.resource.data.propertyId)
+              && get(/databases/$(database)/documents/landlords/$(lid)/tenants/$(request.resource.data.tenantId)).data.propertyId == request.resource.data.propertyId
+              && request.resource.data.status == 'confirmed'
+              && request.resource.data.by == 'caretaker'
+              && request.resource.data.method == 'Cash'
+              && isAmount(request.resource.data.amount));
+
+        // Only the landlord confirms, rejects, corrects or deletes payments.
+        allow update, delete: if isLandlord(lid);
+      }
+
+      match /notices/{nid} {
+        allow read: if isLandlord(lid)
+          || (isTenant(lid) && resource.data.audience in ['all', member(lid).propertyId])
+          || (isCaretaker(lid) && (resource.data.audience == 'all' || resource.data.audience in member(lid).propertyIds));
+        allow write: if isLandlord(lid);
+      }
+
+      match /requests/{rid} {
+        allow read: if isLandlord(lid)
+          || caretakerHas(lid, resource.data.propertyId)
+          || (isTenant(lid) && resource.data.tenantId == member(lid).refId);
+        // A tenant reports a repair for their own home.
+        allow create: if isLandlord(lid)
+          || (isTenant(lid)
+              && request.resource.data.tenantId == member(lid).refId
+              && request.resource.data.propertyId == member(lid).propertyId
+              && request.resource.data.status == 'open');
+        // A caretaker can only move a repair along (open → in progress → done) on their properties.
+        allow update: if isLandlord(lid)
+          || (caretakerHas(lid, resource.data.propertyId)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy'])
+              && request.resource.data.status in ['open', 'progress', 'done']);
+        allow delete: if isLandlord(lid);
+      }
+
+      match /activity/{aid} {
+        allow read, update, delete: if isLandlord(lid);
+        // Tenants and caretakers can add to the log (e.g. "Esther recorded K500 cash"), never read or change it.
+        allow create: if isLandlord(lid) || (isMember(lid) && request.resource.data.byPhone == myPhone());
+      }
+
+      match /deductions/{did} {
+        allow read, write: if isLandlord(lid);
+      }
+
+      match /private/{doc} {
+        allow read, delete: if isLandlord(lid);
+        allow create, update: if isLandlord(lid) && noSecrets(request.resource.data);
+      }
+
+      // Receipt numbers. Landlord and caretakers take the next number inside a transaction,
+      // so two phones can never hand out the same receipt number.
+      match /counters/receipts {
+        allow read: if isLandlord(lid) || isCaretaker(lid);
+        allow create: if isLandlord(lid);
+        allow update: if (isLandlord(lid) || isCaretaker(lid))
+          && request.resource.data.keys().hasOnly(['next'])
+          && request.resource.data.next == resource.data.next + 1;
+      }
+    }
+
+    // Anything not listed above is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
