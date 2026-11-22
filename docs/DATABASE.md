@@ -20,7 +20,8 @@ That is also how the rules know whose records they are.
 landlords/{landlordUid}                 name, phone (+260…), business, email, payout
   members/{+260phone}                   who else may sign in to these records
   properties/{id}                       name, area, kind
-  units/{id}                            propertyId, label, rent, service, serviceName, period
+  units/{id}                            propertyId, label, rent, service, serviceName, period,
+                                        rates: [{ from, rent, service }] (rent changes and the day each starts)
   tenants/{id}                          name, phone, unitId, propertyId, since, dueDay, every, deposit, lang, lines
   caretakers/{id}                       name, phone, propertyIds
   payments/{id}                         tenantId, propertyId, amount, date, method, ref, status, by, byName, receipt, smsKey

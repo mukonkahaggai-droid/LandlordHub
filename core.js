@@ -74,15 +74,54 @@
       if (term ? m % 4 === 0 : i % every === 0) {
         const first = new Date(y, m, 1), last = new Date(y, m + every - 1, 1);
         const n = term ? 1 : every; // a term's rent is already per term
+        const r = LH.rateAt(u, first); // the rent in force when this period starts
         out.push({
           due: LH.dueOn(y, m, t.dueDay),
-          rent: u.rent * n,
-          service: (u.service || 0) * n,
-          amount: (u.rent + (u.service || 0)) * n,
+          rent: r.rent * n,
+          service: r.service * n,
+          amount: (r.rent + r.service) * n,
           label: term ? LH.termLabel(first) : every === 1 ? LH.monthLabel(first) : `${LH.monthLabel(first)} – ${LH.monthLabel(last)}`,
         });
       }
       i++; m++; if (m > 11) { m = 0; y++; }
+    }
+    return out;
+  };
+
+  /* ---------- Rent changes ----------
+     A unit's rent can change over time (a rent increase from 1 January, say). u.rent and u.service
+     are what it started at; u.rates lists each change and the day it starts: [{ from, rent, service }].
+     Every rent period uses the rate in force on its first day, so a change never rewrites past months. */
+  LH.rateAt = function (u, date) {
+    const d = typeof date === 'string' ? date : LH.iso(date);
+    let r = { rent: Number(u.rent) || 0, service: Number(u.service) || 0 };
+    for (const c of u.rates || []) if (c.from <= d) r = { rent: Number(c.rent) || 0, service: Number(c.service) || 0 };
+    return r;
+  };
+  // The next change still to come, if one is booked.
+  LH.nextRate = (u, today) => (u.rates || []).find((c) => c.from > LH.iso(today)) || null;
+  // Book a new rent from a day. A newer decision replaces any change booked for that day or later.
+  LH.setRate = function (u, from, rent, service) {
+    const before = LH.rateAt(u, LH.addDays(LH.parse(from), -1));
+    u.rates = (u.rates || []).filter((c) => c.from < from);
+    if (before.rent === rent && before.service === service) return false; // nothing actually changes
+    u.rates.push({ from, rent, service });
+    return true;
+  };
+  // Days a rent change can start: the 1st of a month, or the first day of a term for bed spaces.
+  LH.startChoices = function (term, today) {
+    const out = [];
+    const y = today.getFullYear(), m = today.getMonth();
+    if (term) {
+      for (let k = 0; out.length < 4; k++) {
+        const d = new Date(y, m - (m % 4) + 4 * k, 1);
+        out.push({ value: LH.iso(d), label: `${LH.termLabel(d)} (from ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()})`, past: d < today });
+      }
+    } else {
+      for (let k = 0; k <= 12; k++) {
+        const d = new Date(y, m + k, 1);
+        out.push({ value: LH.iso(d), label: `1 ${MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}${k === 0 ? ' (this month)' : ''}`, past: k === 0 });
+      }
     }
     return out;
   };
@@ -96,7 +135,8 @@
   LH.account = function (state, t, today) {
     const u = state.units.find((x) => x.id === t.unitId);
     const step = LH.every(t, u);
-    const per = (u.rent + (u.service || 0)) * (u.period === 'term' ? 1 : step);
+    const now = LH.rateAt(u, today);
+    const per = (now.rent + now.service) * (u.period === 'term' ? 1 : step);
     const ps = LH.periods(t, u, today);
     const pays = state.payments
       .filter((p) => p.tenantId === t.id && p.status === 'confirmed')

@@ -68,6 +68,9 @@
   // Properties still in use. A deleted property whose past tenants have rent records is kept, marked
   // deleted, so reports and tax totals stay right; it just no longer shows in lists or choices.
   const liveProps = () => state.properties.filter((p) => !p.deleted);
+  // The rent in force today, and a booked change (e.g. "K6,050 from 1 Dec") for showing next to it.
+  const rateNow = (u) => LH.rateAt(u, T());
+  const rateNext = (u) => { const c = LH.nextRate(u, T()); return c ? ` · ${money(c.rent)} from ${fmtDay(parse(c.from))}` : ''; };
   // The three groups on the Properties tab.
   const propGroup = (p) => (p.kind === 'boarding' ? 'boarding' : p.kind === 'shops' ? 'shops' : 'homes');
   const tenantIn = (u) => state.tenants.find((t) => t.unitId === u.id && !t.ended);
@@ -765,8 +768,8 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         <div class="card pad"><dl class="kv">
           <dt>Phone</dt><dd>${LH.prettyPhone(t.phone)} ${net ? `<span class="net ${net}" style="margin-left:6px">${net}</span>` : ''}</dd>
           ${(t.lines || []).length ? `<dt>Also pays from</dt><dd>${t.lines.map((p) => `${LH.prettyPhone(p)}${LH.network(p) ? ` <span class="net ${LH.network(p)}" style="margin-left:6px">${LH.network(p)}</span>` : ''}`).join('<br>')}</dd>` : ''}
-          <dt>${u.period === 'term' ? 'Rent per term' : 'Monthly rent'}</dt><dd>${money(u.rent)}</dd>
-          ${u.service ? `<dt>${esc(u.serviceName || 'Service charge')}</dt><dd>${money(u.service)}</dd>` : ''}
+          <dt>${u.period === 'term' ? 'Rent per term' : 'Monthly rent'}</dt><dd>${money(rateNow(u).rent)}${LH.nextRate(u, T()) ? `<div class="small" style="color:var(--accent);font-weight:600">${money(LH.nextRate(u, T()).rent)} from ${fmtDate(parse(LH.nextRate(u, T()).from))}</div>` : ''}</dd>
+          ${rateNow(u).service ? `<dt>${esc(u.serviceName || 'Service charge')}</dt><dd>${money(rateNow(u).service)}</dd>` : ''}
           <dt>Pays</dt><dd>${howOften(t)}${perWord(t) !== 'month' && perWord(t) !== 'term' ? ` · ${money(a.per)} each time` : ''}</dd>
           <dt>Rent due on</dt><dd>${ordinal(t.dueDay)}${perWord(t) === 'month' ? ' of the month' : perWord(t) === 'term' ? ' of the term' : `, every ${perWord(t)}`}</dd>
           <dt>Next due</dt><dd>${fmtDate(a.dueDate)}</dd>
@@ -829,8 +832,8 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const boarding = p.kind === 'boarding';
     const row = (u) => {
       const t = tenantIn(u);
-      if (t) return tenantRow(t).replace(`<div class="meta">${esc(where(t))}</div>`, `<div class="meta">${esc(u.label)} · ${money(u.rent)}/${perLabel(u)}</div>`);
-      return `<div class="row-wrap"><div class="row static"><span class="tile neutral">${icon(boarding ? 'user' : p.kind === 'shops' ? 'building' : 'door')}</span><div class="grow"><div class="title">${esc(u.label)}</div><div class="meta">Empty · ${money(u.rent)}/${perLabel(u)}</div></div></div><button class="btn sm" data-action="addTenant" data-unit="${u.id}">Add tenant</button></div>`;
+      if (t) return tenantRow(t).replace(`<div class="meta">${esc(where(t))}</div>`, `<div class="meta">${esc(u.label)} · ${money(rateNow(u).rent)}/${perLabel(u)}${rateNext(u)}</div>`);
+      return `<div class="row-wrap"><div class="row static"><span class="tile neutral">${icon(boarding ? 'user' : p.kind === 'shops' ? 'building' : 'door')}</span><div class="grow"><div class="title">${esc(u.label)}</div><div class="meta">Empty · ${money(rateNow(u).rent)}/${perLabel(u)}${rateNext(u)}</div></div></div><button class="btn sm" data-action="addTenant" data-unit="${u.id}">Add tenant</button></div>`;
     };
     // Boarding houses: one section per house, showing how many of its bed spaces are taken.
     const houses = boarding ? [...new Set(units.map(houseOf))] : [];
@@ -841,11 +844,11 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
           // Who lives in this house, then one line for the free bed spaces.
           return `<section class="section"><div class="section-head"><div><h2>${esc(h)}</h2><div class="small muted num">${occ.length} of ${us.length} bed spaces taken</div></div><button class="link-btn" data-action="editHouse" data-pid="${p.id}" data-house="${esc(h)}">Edit house</button></div>
             <div class="list">${occ.map(row).join('')}
-              <div class="row-wrap house-free"><div class="row static"><span class="tile ${free ? '' : 'neutral'}">${icon(free ? 'plus' : 'check')}</span><div class="grow"><div class="title">${free ? `${free} bed space${free === 1 ? '' : 's'} free` : 'House is full'}</div><div class="meta">${money(us[0].rent)} per bed, per term</div></div></div>
+              <div class="row-wrap house-free"><div class="row static"><span class="tile ${free ? '' : 'neutral'}">${icon(free ? 'plus' : 'check')}</span><div class="grow"><div class="title">${free ? `${free} bed space${free === 1 ? '' : 's'} free` : 'House is full'}</div><div class="meta">${money(rateNow(us[0]).rent)} per bed, per term${rateNext(us[0])}</div></div></div>
               ${free ? `<button class="btn primary sm" data-action="addTenant" data-unit="${freeUnit.id}">Add tenant</button>` : ''}</div>
             </div></section>`; }).join('') || '<div class="empty">No bed spaces yet. Tap “Bed spaces”.</div>'
       : `<div class="list">${units.map(row).join('') || '<div class="empty">Nothing here yet. Tap “Add”.</div>'}</div>`;
-    return `${head(p.name, { back: 'properties', sub: `${esc(p.area)}${boarding ? ` · ${houses.length} house${houses.length === 1 ? '' : 's'}, ${units.length} bed spaces` : ''}`, action: `<button class="btn sm" data-action="addUnit" data-id="${p.id}">${icon('plus', 'sm')}${boarding ? 'Bed spaces' : 'Add'}</button>` })}
+    return `${head(p.name, { back: 'properties', sub: `${esc(p.area)}${boarding ? ` · ${houses.length} house${houses.length === 1 ? '' : 's'}, ${units.length} bed spaces` : ''}`, action: `<div class="head-actions"><button class="btn sm" data-action="editProperty" data-id="${p.id}">${icon('edit', 'sm')}Edit</button><button class="btn sm" data-action="addUnit" data-id="${p.id}">${icon('plus', 'sm')}${boarding ? 'Beds' : 'Add'}</button></div>` })}
       ${boarding ? body.replace('<section class="section">', '<section class="section" style="margin-top:4px">') : body}
       <section class="section"><div class="section-head"><h2>Caretaker</h2><a href="#/caretakers">Manage</a></div>
         <div class="list">${care.length ? care.map((c) => `<div class="row static"><span class="avatar">${initials(c.name)}</span><div class="grow"><div class="title">${esc(c.name)}</div><div class="meta">${LH.prettyPhone(c.phone)} · records cash payments</div></div></div>`).join('') : '<div class="empty">No caretaker for this property.</div>'}</div>
@@ -1674,6 +1677,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const T0 = LH.templates.find((x) => x.id === tpl);
     const fill = (s) => {
       let out = s.replace(/\{landlord\}/g, state.landlord.name);
+      for (const [k, v] of Object.entries(o.fills || {})) if (v) out = out.split(k).join(v);
       if (tt) { const a = acct(tt); out = out.replace(/\{tenant\}/g, first(tt.name)).replace(/\{unit\}/g, unitOf(tt).label).replace(/\{amount\}/g, money(Math.max(0, a.balance))).replace(/\{due\}/g, fmtDate(a.dueDate)); }
       return out.replace(/\{tenant\}/g, '[tenant name]').replace(/\{unit\}/g, '[house or room]').replace(/\{amount\}/g, '[amount]').replace(/\{due\}/g, '[due date]');
     };
@@ -1741,10 +1745,10 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         [...new Set(us.map(houseOf))].forEach((h) => {
           const inHouse = us.filter((u) => houseOf(u) === h), free = inHouse.filter((u) => !tenantIn(u)).length;
           const mine = t && inHouse.some((u) => u.id === t.unitId);
-          if (free || mine) opts.push({ value: `h:${p.id}|${h}`, text: `${h} · ${free} of ${inHouse.length} bed spaces free · ${money(inHouse[0].rent)}/term`, unit: inHouse[0] });
+          if (free || mine) opts.push({ value: `h:${p.id}|${h}`, text: `${h} · ${free} of ${inHouse.length} bed spaces free · ${money(rateNow(inHouse[0]).rent)}/term`, unit: inHouse[0] });
         });
       } else {
-        us.filter((u) => !tenantIn(u) || (t && u.id === t.unitId)).forEach((u) => opts.push({ value: u.id, text: `${u.label} · ${money(u.rent)}/${perLabel(u)}`, unit: u }));
+        us.filter((u) => !tenantIn(u) || (t && u.id === t.unitId)).forEach((u) => opts.push({ value: u.id, text: `${u.label} · ${money(rateNow(u).rent)}/${perLabel(u)}`, unit: u }));
       }
       if (opts.length) groups.push({ label: p.name, opts });
     });
@@ -1815,7 +1819,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       </form>`);
   }
   const unitById = (id) => byId(state.units, id);
-  const everySaid = (n, unitId) => { n = Math.round(Number(n)); const u = placeUnit(unitId); if (!(n >= 1 && n <= 24)) return 'Choose 1 to 24 months'; const amt = u ? money((u.rent + (u.service || 0)) * n) : ''; return n === 1 ? `month · ${amt} each time` : `months · ${amt} each time`; };
+  const everySaid = (n, unitId) => { n = Math.round(Number(n)); const u = placeUnit(unitId); if (!(n >= 1 && n <= 24)) return 'Choose 1 to 24 months'; const amt = u ? money((rateNow(u).rent + rateNow(u).service) * n) : ''; return n === 1 ? `month · ${amt} each time` : `months · ${amt} each time`; };
   const dueSaid = (d) => { d = Number(d); return d >= 1 && d <= 31 ? `The ${ordinal(d)} of every month${d > 28 ? ' (or the last day)' : ''}` : 'Choose a day from 1 to 31'; };
 
   /* ---------- Linking a tenant's own app account to this landlord ----------
@@ -1830,7 +1834,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     return {
       c: t.invite.code,
       t: { id: t.id, name: t.name, phone: t.phone, unitId: t.unitId, since: t.since, dueDay: t.dueDay, every: t.every || 1, deposit: t.deposit || 0, lang: t.lang },
-      u: { id: u.id, label: u.label, rent: u.rent, period: u.period, service: u.service || 0, serviceName: u.serviceName || '', propertyId: u.propertyId },
+      u: { id: u.id, label: u.label, rent: u.rent, period: u.period, service: u.service || 0, serviceName: u.serviceName || '', propertyId: u.propertyId, rates: (u.rates || []).slice(-24) },
       p: { id: p.id, name: p.name, area: p.area, kind: p.kind },
       l: { name: L0.name, phone: L0.phone, business: L0.business || '' },
     };
@@ -1910,7 +1914,9 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     return {
       c: String(d.c || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12),
       t: { id: t.id, name: text(t.name) || 'Tenant', phone, unitId: u.id, since: /^\d{4}-\d{2}-\d{2}$/.test(t.since) ? t.since : iso(T()), dueDay: Math.round(dueDay), every: Math.round(num(t.every, 1, 12) || 1), deposit: num(t.deposit, 0, 10000000) || 0, lang: ['en', 'bem', 'nya'].includes(t.lang) ? t.lang : 'en' },
-      u: { id: u.id, label: text(u.label) || 'Home', rent, period: u.period === 'term' ? 'term' : 'month', service: num(u.service, 0, 10000000) || 0, serviceName: text(u.serviceName), propertyId: p.id },
+      u: { id: u.id, label: text(u.label) || 'Home', rent, period: u.period === 'term' ? 'term' : 'month', service: num(u.service, 0, 10000000) || 0, serviceName: text(u.serviceName), propertyId: p.id,
+        rates: (Array.isArray(u.rates) ? u.rates : []).slice(-24).filter((c) => c && /^\d{4}-\d{2}-\d{2}$/.test(c.from) && num(c.rent, 0, 10000000) != null)
+          .map((c) => ({ from: c.from, rent: num(c.rent, 0, 10000000), service: num(c.service, 0, 10000000) || 0 })).sort((a, b) => (a.from < b.from ? -1 : 1)) },
       p: { id: p.id, name: text(p.name) || 'Property', area: text(p.area), kind: ['flats', 'boarding', 'house', 'shops'].includes(p.kind) ? p.kind : 'flats' },
       l: { name: text(l.name) || 'Your landlord', phone: LH.cleanPhone(l.phone), business: text(l.business) },
     };
@@ -1931,7 +1937,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         <dl class="kv mt">
           <dt>Tenant</dt><dd>${esc(d.t.name)}</dd>
           <dt>Home</dt><dd>${esc(d.u.label)}, ${esc(d.p.name)}</dd>
-          <dt>Rent</dt><dd>${money((d.u.rent + (d.u.service || 0)) * (d.u.period === 'term' ? 1 : d.t.every || 1))} ${per === 'month' || per === 'term' ? `a ${per}` : `every ${per}`}</dd>
+          <dt>Rent</dt><dd>${money((LH.rateAt(d.u, T()).rent + LH.rateAt(d.u, T()).service) * (d.u.period === 'term' ? 1 : d.t.every || 1))} ${per === 'month' || per === 'term' ? `a ${per}` : `every ${per}`}</dd>
           <dt>Due</dt><dd>${per === 'month' || per === 'term' ? `${ordinal(d.t.dueDay)} of each ${per}` : `${ordinal(d.t.dueDay)}, every ${per}`}</dd>
         </dl></div>`;
     if (j.step === 'otp') {
@@ -2025,16 +2031,112 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         <div class="field"><label class="label" for="beds">Bed spaces</label>
           <div class="due-row"><input class="input due-input num" id="beds" name="beds" type="number" inputmode="numeric" min="${Math.max(1, taken)}" max="40" required value="${us.length}"><span class="due-said">${taken} tenant${taken === 1 ? '' : 's'} live here now</span></div>
           <div class="help">${taken ? `Because ${taken} tenant${taken === 1 ? ' lives' : 's live'} here, this house can't have fewer than ${taken} bed space${taken === 1 ? '' : 's'}. Removing bed spaces only removes empty ones.` : 'Removing bed spaces only removes empty ones.'}</div></div>
-        <label class="field"><span class="label">Rent per bed, per term</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" required value="${us[0] ? us[0].rent : ''}"></div><div class="help">Applies to every bed space in this house.</div></label>
+        <label class="field"><span class="label">Rent per bed, per term</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" required value="${us[0] ? rateNow(us[0]).rent : ''}"></div><div class="help">Applies to every bed space in this house.</div></label>
         <button class="btn primary block lg" type="submit">Save house</button>
       </form>`);
+    // A changed rent starts on a term, not straight away (earlier terms keep the old rent).
+    const btn = sheetRoot.querySelector('form[data-form="editHouse"] button[type=submit]');
+    if (btn) btn.insertAdjacentHTML('beforebegin', `<label class="field"><span class="label">If the rent changes, it starts</span>${startSelect(true)}</label>`);
+  }
+
+  // "Starting from" choices for a rent change.
+  function startSelect(term) {
+    const opts = LH.startChoices(term, T());
+    const pick = (opts.find((o) => !o.past) || opts[0]).value;
+    return `<select class="input" name="from" data-input="rentPreview">${opts.map((o) => `<option value="${o.value}" ${o.value === pick ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+  }
+  const unitWord = (p, n) => (p.kind === 'boarding' ? (n === 1 ? 'bed space' : 'bed spaces') : p.kind === 'shops' ? (n === 1 ? 'shop' : 'shops') : n === 1 ? 'house or flat' : 'houses and flats');
+
+  /* Edit a property: its name and area, and a rent change for all its units at once
+     (a raise by an amount or a percentage, or one new rent), starting on a chosen day. */
+  function editPropertySheet(pid) {
+    const p = byId(state.properties, pid); if (!p) return;
+    const units = state.units.filter((u) => u.propertyId === pid);
+    const term = p.kind === 'boarding';
+    openSheet(`${sheetHead(`Edit ${esc(p.name)}`)}
+      <form data-form="editProperty" autocomplete="off"><input type="hidden" name="pid" value="${pid}">
+        <label class="field"><span class="label">Property name</span><input class="input" name="name" required value="${esc(p.name)}"></label>
+        <label class="field"><span class="label">Area and town</span><input class="input" name="area" required value="${esc(p.area)}"></label>
+        ${units.length ? `<fieldset class="field rent-change"><legend class="label">Rent for all ${units.length} ${unitWord(p, units.length)}</legend>
+          <div class="seg">
+            <label><input type="radio" name="mode" value="keep" checked data-input="rentPreview"><span>Keep as it is</span></label>
+            <label><input type="radio" name="mode" value="add" data-input="rentPreview"><span>Raise by K</span></label>
+            <label><input type="radio" name="mode" value="pct" data-input="rentPreview"><span>Raise by %</span></label>
+            <label><input type="radio" name="mode" value="set" data-input="rentPreview"><span>New rent</span></label>
+          </div>
+          <div id="rent-fields" hidden>
+            <label class="field mt-s"><span class="label" id="rent-val-label">How much more?</span><div class="input-group"><span class="prefix" id="rent-val-prefix">K</span><input class="input" name="val" type="number" inputmode="decimal" step="any" data-input="rentPreview"></div></label>
+          </div>
+          <label class="field mt-s"><span class="label">Service charge for all <span class="faint" style="font-weight:400">(leave empty to keep)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="service" type="number" inputmode="decimal" min="0" placeholder="Keep as it is" data-input="rentPreview"></div></label>
+          <label class="field"><span class="label">Starting from</span>${startSelect(term)}<div class="help">Earlier ${term ? 'terms' : 'months'} keep the old rent, so nobody's past balance changes.</div></label>
+          <div class="rent-preview" id="rent-preview" aria-live="polite"></div>
+          <button type="button" class="link-btn" data-action="editRents" data-id="${pid}">Change rents one by one instead</button>
+        </fieldset>` : ''}
+        <button class="btn primary block lg mt" type="submit">Save changes</button>
+      </form>`);
+  }
+
+  // The new rent and service charge for one unit under the chosen change (null: no change).
+  function plannedRate(u, f) {
+    const from = f.get('from'), mode = f.get('mode') || 'keep', val = Number(f.get('val'));
+    const cur = LH.rateAt(u, LH.addDays(parse(from), -1));
+    let rent = cur.rent;
+    if (mode === 'add') rent = cur.rent + val;
+    else if (mode === 'pct') rent = cur.rent * (1 + val / 100);
+    else if (mode === 'set') rent = val;
+    rent = Math.round(rent);
+    const sv = String(f.get('service') || '').trim();
+    const service = sv === '' ? cur.service : Math.round(Number(sv));
+    return { cur, rent, service };
+  }
+  function rentChangeProblem(f) {
+    const mode = f.get('mode') || 'keep', val = Number(f.get('val')), sv = String(f.get('service') || '').trim();
+    if (mode !== 'keep' && !(String(f.get('val') || '').trim() !== '' && isFinite(val))) return 'Enter the amount';
+    if (mode === 'add' && !(val > 0)) return 'Enter how much more, in kwacha';
+    if (mode === 'pct' && !(val > 0 && val <= 100)) return 'Enter a percentage from 1 to 100';
+    if (mode === 'set' && !(val > 0)) return 'Enter the new rent';
+    if (sv !== '' && !(Number(sv) >= 0)) return 'Check the service charge';
+    return '';
+  }
+
+  /* Change each unit's name, rent and service charge separately, from one starting day. */
+  function editRentsSheet(pid) {
+    const p = byId(state.properties, pid); if (!p) return;
+    const units = state.units.filter((u) => u.propertyId === pid);
+    const term = p.kind === 'boarding';
+    const from = LH.startChoices(term, T()).find((o) => !o.past) || LH.startChoices(term, T())[0];
+    openSheet(`${sheetHead(`Rents at ${esc(p.name)}`)}
+      <form data-form="editRents" autocomplete="off"><input type="hidden" name="pid" value="${pid}">
+        <label class="field"><span class="label">New rents start</span>${startSelect(term)}<div class="help">Earlier ${term ? 'terms' : 'months'} keep the old rent.</div></label>
+        <div class="unit-edit-head"><span>Name</span><span>Rent / ${term ? 'term' : 'month'}</span><span>Service</span></div>
+        <div class="unit-edit-list">${units.map((u) => { const r = LH.rateAt(u, from.value); const t = tenantIn(u); return `<div class="unit-edit">
+          <label><span class="sr">Name</span><input class="input" name="label_${u.id}" value="${esc(u.label)}" required>${t ? `<span class="unit-who">${esc(t.name)}</span>` : '<span class="unit-who">Empty</span>'}</label>
+          <label><span class="sr">Rent for ${esc(u.label)}</span><input class="input num" name="rent_${u.id}" type="number" inputmode="decimal" min="1" value="${r.rent}" required></label>
+          <label><span class="sr">Service charge for ${esc(u.label)}</span><input class="input num" name="svc_${u.id}" type="number" inputmode="decimal" min="0" value="${r.service}"></label>
+        </div>`; }).join('')}</div>
+        <button class="btn primary block lg mt" type="submit">Save rents</button>
+      </form>`);
+  }
+
+  /* After a rent rise, offer to tell the tenants it affects, with a notice already filled in. */
+  function afterRentChange(p, changed, from) {
+    const raised = changed.filter((c) => c.rent > c.cur.rent && tenantIn(c.u));
+    if (!raised.length) return;
+    const ids = raised.map((c) => tenantIn(c.u).id);
+    const same = raised.every((c) => c.cur.rent === raised[0].cur.rent && c.rent === raised[0].rent);
+    openSheet(`${sheetHead('Rent updated')}
+      <p class="muted">${raised.length} tenant${raised.length === 1 ? '' : 's'} will pay more from ${fmtDate(parse(from))}. Let ${raised.length === 1 ? 'them' : 'them'} know with a notice?</p>
+      <div class="list mt">${raised.slice(0, 6).map((c) => `<div class="row static"><span class="avatar">${initials(tenantIn(c.u).name)}</span><div class="grow"><div class="title">${esc(tenantIn(c.u).name)}</div><div class="meta">${esc(c.u.label)} · ${money(c.cur.rent)} → <strong>${money(c.rent)}</strong></div></div></div>`).join('')}${raised.length > 6 ? `<div class="small muted" style="padding:8px 14px">and ${raised.length - 6} more</div>` : ''}</div>
+      <button class="btn primary block lg mt" data-action="rentNotice" data-ids="${ids.join(',')}" data-from="${from}" data-old="${same ? raised[0].cur.rent : ''}" data-new="${same ? raised[0].rent : ''}">${icon('send', 'sm')}Write a rent change notice</button>
+      <button class="btn ghost block mt-s" data-action="closeSheet">Not now</button>`);
   }
 
   function addUnitSheet(pid) {
     const p = byId(state.properties, pid);
     if (p.kind === 'boarding') {
       const houses = [...new Set(state.units.filter((u) => u.propertyId === pid).map(houseOf))];
-      const rent = (state.units.find((u) => u.propertyId === pid) || {}).rent || '';
+      const anyUnit = state.units.find((u) => u.propertyId === pid);
+      const rent = anyUnit ? rateNow(anyUnit).rent : '';
       return openSheet(`${sheetHead(`Add bed spaces to ${p.name}`)}
         <form data-form="addBeds" autocomplete="off"><input type="hidden" name="pid" value="${pid}">
           <label class="field"><span class="label">Which house?</span><select class="input" name="house" data-input="pickHouse">
@@ -2221,6 +2323,9 @@ We never sell your data or use it for adverts.</div>
     remind: (d) => remindSheet([d.id]),
     remindAll: () => remindSheet(activeTenants().filter((t) => { const a = acct(t); return a.status === 'overdue' || (a.status === 'partial' && a.daysLate > 0); }).map((t) => t.id)),
     tenantFilter: (d) => { ui.tenantFilter = d.f; render(); },
+    editProperty: (d) => editPropertySheet(d.id),
+    editRents: (d) => editRentsSheet(d.id),
+    rentNotice: (d) => newNoticeSheet({ tpl: 'increase', audience: d.ids.split(','), fills: { '[date]': fmtDate(parse(d.from)), '[current rent]': d.old ? money(Number(d.old)) : '', '[new rent]': d.new ? money(Number(d.new)) : '' } }),
     propFilter: (d) => {
       ui.propFilter = d.f; render();
       // Keep the chosen chip in view; the row starts scrolled back to "All" after redrawing.
@@ -2674,6 +2779,57 @@ We never sell your data or use it for adverts.</div>
       form.outerHTML = `<div class="card pad sms-ask done"><span class="tile">${icon('check')}</span><div><div class="title" style="font-weight:700">${money(m.amount)} recorded for ${esc(t.name)}</div><div class="meta">Receipt ${esc(p.receipt)}${m.phone ? ` · ${LH.prettyPhone(m.phone)} saved to their lines` : ''}</div></div></div>`;
       toast(`${money(m.amount)} recorded for ${first(t.name)}`);
     },
+    editProperty: (f) => {
+      const p = byId(state.properties, f.get('pid')); if (!p) return;
+      const name = String(f.get('name') || '').trim(), area = String(f.get('area') || '').trim();
+      if (!name) return toast('Give the property a name');
+      if (!area) return toast('Enter the area and town');
+      const units = state.units.filter((u) => u.propertyId === p.id);
+      const mode = f.get('mode') || 'keep', serviceGiven = String(f.get('service') || '').trim() !== '';
+      const changed = [];
+      if (units.length && (mode !== 'keep' || serviceGiven)) {
+        const problem = rentChangeProblem(f); if (problem) return toast(problem);
+        const from = f.get('from');
+        units.forEach((u) => {
+          const r = plannedRate(u, f);
+          if (!(r.rent > 0)) return;
+          if (LH.setRate(u, from, r.rent, r.service)) changed.push({ u, cur: r.cur, rent: r.rent, service: r.service });
+        });
+      }
+      const renamed = p.name !== name || p.area !== area;
+      p.name = name; p.area = area;
+      if (changed.length) log(`Changed the rent at ${p.name} from ${fmtDay(parse(f.get('from')))} (${changed.length} ${unitWord(p, changed.length)})`);
+      else if (renamed) log(`Updated the details of ${p.name}`);
+      save(); closeSheet(); render();
+      toast(changed.length ? `New rent from ${fmtDay(parse(f.get('from')))} for ${changed.length} ${unitWord(p, changed.length)}` : 'Changes saved');
+      if (changed.length) setTimeout(() => afterRentChange(p, changed, f.get('from')), 450);
+    },
+    editRents: (f) => {
+      const p = byId(state.properties, f.get('pid')); if (!p) return;
+      const from = f.get('from');
+      const units = state.units.filter((u) => u.propertyId === p.id);
+      const plans = [];
+      for (const u of units) {
+        const label = String(f.get('label_' + u.id) || '').trim(), rent = Math.round(Number(f.get('rent_' + u.id))), svc = Math.round(Number(f.get('svc_' + u.id)) || 0);
+        if (!label) return toast('Every place needs a name');
+        if (!(rent > 0)) return toast(`Enter the rent for ${label}`);
+        if (svc < 0) return toast(`Check the service charge for ${label}`);
+        plans.push({ u, label, rent, svc });
+      }
+      const changed = [];
+      plans.forEach(({ u, label, rent, svc }) => {
+        const cur = LH.rateAt(u, LH.addDays(parse(from), -1));
+        if (label !== u.label) { u.label = label; if (u.house) u.house = label.includes(' · ') ? label.split(' · ')[0] : u.house; }
+        // Only units whose rent was actually edited change; a rise already booked for that day stays.
+        const onDay = LH.rateAt(u, from);
+        if (onDay.rent === rent && onDay.service === svc) return;
+        if (LH.setRate(u, from, rent, svc)) changed.push({ u, cur, rent, service: svc });
+      });
+      if (changed.length) log(`Changed the rent of ${changed.length} ${unitWord(p, changed.length)} at ${p.name} from ${fmtDay(parse(from))}`);
+      save(); closeSheet(); render();
+      toast(changed.length ? `New rent from ${fmtDay(parse(from))} for ${changed.length} ${unitWord(p, changed.length)}` : 'Changes saved');
+      if (changed.length) setTimeout(() => afterRentChange(p, changed, from), 450);
+    },
     editHouse: (f) => {
       const pid = f.get('pid'), old = f.get('house'), name = f.get('name').trim();
       const want = Math.round(Number(f.get('beds'))), rent = Number(f.get('rent'));
@@ -2686,7 +2842,8 @@ We never sell your data or use it for adverts.</div>
       if (!(rent > 0)) return toast('Enter the rent per bed space');
       const bedNo = (u) => Number((u.label.match(/(\d+)\s*$/) || [])[1]) || 0;
       // Rename and set the rent on every bed space in the house.
-      us.forEach((u) => { u.house = name; u.label = u.label.includes(' · ') ? `${name} · ${u.label.split(' · ').slice(1).join(' · ')}` : `${name} · ${u.label}`; u.rent = rent; });
+      const from = f.get('from') || iso(T());
+      us.forEach((u) => { u.house = name; u.label = u.label.includes(' · ') ? `${name} · ${u.label.split(' · ').slice(1).join(' · ')}` : `${name} · ${u.label}`; const onDay = LH.rateAt(u, from); if (onDay.rent !== rent) LH.setRate(u, from, rent, onDay.service); });
       if (want > us.length) {
         let next = Math.max(us.length, ...us.map(bedNo));
         for (let i = us.length; i < want; i++) state.units.push({ id: LH.uid('U'), propertyId: pid, house: name, label: `${name} · Bed ${++next}`, rent, service: us[0] ? us[0].service || 0 : 0, serviceName: 'Service charge', period: 'term' });
@@ -2731,6 +2888,21 @@ We never sell your data or use it for adverts.</div>
 
   /* ---------- Live inputs ---------- */
   const inputs = {
+    rentPreview: (el) => {
+      const form = el.closest('form'); if (!form || form.dataset.form !== 'editProperty') return;
+      const f = new FormData(form), mode = f.get('mode') || 'keep';
+      const box = form.querySelector('#rent-fields'); if (box) box.hidden = mode === 'keep';
+      const lab = form.querySelector('#rent-val-label'), pre = form.querySelector('#rent-val-prefix');
+      if (lab) lab.textContent = { add: 'How much more, in kwacha?', pct: 'By what percentage?', set: `New rent for each, per ${form.querySelector('[name=from]').options[0].text.startsWith('Term') ? 'term' : 'month'}` }[mode] || '';
+      if (pre) pre.textContent = mode === 'pct' ? '%' : 'K';
+      const out = form.querySelector('#rent-preview'); if (!out) return;
+      const p = byId(state.properties, f.get('pid'));
+      const units = state.units.filter((u) => u.propertyId === p.id);
+      const serviceGiven = String(f.get('service') || '').trim() !== '';
+      if ((mode === 'keep' && !serviceGiven) || rentChangeProblem(f)) { out.innerHTML = ''; return; }
+      const rows = units.map((u) => ({ u, r: plannedRate(u, f) })).filter((x) => x.r.rent !== x.r.cur.rent || x.r.service !== x.r.cur.service);
+      out.innerHTML = rows.length ? `<div class="label">From ${esc(fmtDate(parse(f.get('from'))))}</div>${rows.slice(0, 8).map(({ u, r }) => `<div class="between small"><span>${esc(u.label)}</span><span class="num">${money(r.cur.rent)} → <strong>${money(r.rent)}</strong>${r.service !== r.cur.service ? ` · service ${money(r.service)}` : ''}</span></div>`).join('')}${rows.length > 8 ? `<div class="small muted">and ${rows.length - 8} more</div>` : ''}` : '<div class="small muted">Nothing changes.</div>';
+    },
     promiseDate: (el) => {
       const form = el.closest('form'); if (!form || !el.value) return;
       const t = byId(state.tenants, form.tenant.value);
