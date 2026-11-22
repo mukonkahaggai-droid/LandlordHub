@@ -10,7 +10,7 @@
   const toastEl = document.getElementById('toast');
 
   let state, session;
-  const ui = { tenantFilter: 'all', tenantQuery: '', login: { step: 'phone', phone: '' } };
+  const ui = { tenantFilter: 'all', tenantQuery: '', propFilter: 'all', login: { step: 'phone', phone: '' } };
 
   /* ---------- Storage ---------- */
   function load() {
@@ -65,6 +65,11 @@
   const activeTenants = () => state.tenants.filter((t) => !t.ended);
   const unitOf = (t) => byId(state.units, t.unitId);
   const propOf = (u) => byId(state.properties, u.propertyId);
+  // Properties still in use. A deleted property whose past tenants have rent records is kept, marked
+  // deleted, so reports and tax totals stay right; it just no longer shows in lists or choices.
+  const liveProps = () => state.properties.filter((p) => !p.deleted);
+  // The three groups on the Properties tab.
+  const propGroup = (p) => (p.kind === 'boarding' ? 'boarding' : p.kind === 'shops' ? 'shops' : 'homes');
   const tenantIn = (u) => state.tenants.find((t) => t.unitId === u.id && !t.ended);
   const acct = (t) => LH.account(state, t, T());
   const first = (name) => name.split(' ')[0];
@@ -611,7 +616,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
             ['button', `data-action="remindAll"${overdue.length ? '' : ' disabled'}`, 'bell', 'Remind late tenants', overdue.length ? 'Send them a WhatsApp or SMS' : 'Nobody to remind'],
             ['button', 'data-action="newNotice"', 'notice', 'Send a notice', 'Tell tenants about water, power or rent'],
             ['a', 'href="#/tenants"', 'users', 'My tenants', `${activeTenants().length} tenants · phone numbers and balances`],
-            ['a', 'href="#/properties"', 'building', 'My properties', `${state.properties.length} propert${state.properties.length === 1 ? 'y' : 'ies'} · houses, rooms and rent`],
+            ['a', 'href="#/properties"', 'building', 'My properties', `${liveProps().length} propert${liveProps().length === 1 ? 'y' : 'ies'} · houses, rooms, shops and rent`],
             ['a', 'href="#/reports"', 'file', 'Reports for tax (ZRA)', 'Income by month and property'],
           ].map(([tag, attrs, ic, label, desc, tone = '']) => `<${tag} class="action-tab ${tone}" ${attrs}${tag === 'button' ? ' type="button"' : ''}>
             <span class="at-icon">${icon(ic, 'lg')}</span>
@@ -692,7 +697,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       paid: all.filter((s) => s.a.status === 'paid'),
     };
     const chips = [['all', 'All'], ['late', 'Late'], ['partial', 'Part paid'], ['due', 'Due soon'], ['paid', 'Paid']];
-    return `${head('Tenants', { sub: `${all.length} tenants across ${state.properties.length} properties`, action: `<button class="icon-btn" data-action="addTenant" aria-label="Add tenant">${icon('plus')}</button>` })}
+    return `${head('Tenants', { sub: `${all.length} tenants across ${liveProps().length} properties`, action: `<button class="icon-btn" data-action="addTenant" aria-label="Add tenant">${icon('plus')}</button>` })}
       <div class="search"><label class="sr" for="tq">Search tenants</label>${icon('search', 'sm')}<input id="tq" class="input" type="search" placeholder="Search by name, phone or house" value="${esc(ui.tenantQuery)}" data-input="tenantSearch" autocomplete="off"></div>
       <div class="chips mt" role="tablist">${chips.map(([k, l]) => `<button class="chip${ui.tenantFilter === k ? ' active' : ''}" data-action="tenantFilter" data-f="${k}" role="tab" aria-selected="${ui.tenantFilter === k}">${l}<span class="count">${groups[k].length}</span></button>`).join('')}</div>
       <div class="list mt" id="tenant-list">${tenantListHTML(groups[ui.tenantFilter])}</div>`;
@@ -789,8 +794,15 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
 
   L.properties = function () {
     const t = T();
-    return `${head('Properties', { sub: `${state.units.length} houses and rooms · ${state.units.filter((u) => tenantIn(u)).length} rented out`, action: `<button class="icon-btn" data-action="addProperty" aria-label="Add property">${icon('plus')}</button>` })}
-      <div class="stack">${state.properties.map((p) => {
+    const props = liveProps();
+    const liveUnits = state.units.filter((u) => props.some((p) => p.id === u.propertyId));
+    const chips = [['all', 'All'], ['boarding', 'Boarding houses'], ['homes', 'Houses & flats'], ['shops', 'Shops']];
+    const count = (k) => (k === 'all' ? props.length : props.filter((p) => propGroup(p) === k).length);
+    const shown = ui.propFilter === 'all' ? props : props.filter((p) => propGroup(p) === ui.propFilter);
+    const emptyText = { all: 'No properties yet. Tap + to add your first one.', boarding: 'No boarding houses yet.', homes: 'No houses or flats yet.', shops: 'No shops yet. Tap + and choose “Shops” to add them.' }[ui.propFilter];
+    return `${head('Properties', { sub: `${liveUnits.length} places to rent · ${liveUnits.filter((u) => tenantIn(u)).length} rented out`, action: `<button class="icon-btn" data-action="addProperty" aria-label="Add property">${icon('plus')}</button>` })}
+      <div class="chips" role="tablist" aria-label="Show">${chips.map(([k, l]) => `<button class="chip${ui.propFilter === k ? ' active' : ''}" data-action="propFilter" data-f="${k}" role="tab" aria-selected="${ui.propFilter === k}">${l}<span class="count">${count(k)}</span></button>`).join('')}</div>
+      <div class="stack mt">${shown.length ? '' : `<div class="empty">${emptyText}</div>`}${shown.map((p) => {
         const units = state.units.filter((u) => u.propertyId === p.id);
         const occ = units.filter((u) => tenantIn(u));
         const ten = occ.map(tenantIn);
@@ -798,7 +810,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         const late = ten.filter((x) => acct(x).status === 'overdue').length;
         const pct = ms.expected ? Math.min(100, Math.round((ms.received / ms.expected) * 100)) : null;
         return `<a class="card pad" href="#/property/${p.id}" style="display:block;color:inherit">
-          <div class="between"><div style="min-width:0"><div style="font-weight:650;font-size:16px">${esc(p.name)}</div><div class="small muted">${esc(p.area)} · ${p.kind === 'boarding' ? `Boarding house · ${new Set(units.map(houseOf)).size} house${new Set(units.map(houseOf)).size === 1 ? '' : 's'}` : p.kind === 'house' ? 'House' : 'Flats or houses'}</div></div>${icon('chev', 'chev')}</div>
+          <div class="between"><div style="min-width:0"><div style="font-weight:650;font-size:16px">${esc(p.name)}</div><div class="small muted">${esc(p.area)} · ${p.kind === 'boarding' ? `Boarding house · ${new Set(units.map(houseOf)).size} house${new Set(units.map(houseOf)).size === 1 ? '' : 's'}` : p.kind === 'shops' ? `Shops · ${units.length} shop${units.length === 1 ? '' : 's'}` : p.kind === 'house' ? 'House' : 'Flats or houses'}</div></div>${icon('chev', 'chev')}</div>
           <div class="stats mt" style="grid-template-columns:repeat(3,1fr) !important;gap:8px">
             <div><div class="small muted">${p.kind === 'boarding' ? 'Beds taken' : 'Rented out'}</div><div style="font-weight:650" class="num">${occ.length} of ${units.length}</div></div>
             <div><div class="small muted">This month</div><div style="font-weight:650" class="num">${pct === null ? '—' : money(ms.received)}</div></div>
@@ -811,14 +823,14 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
 
   L.property = function (id) {
     const p = byId(state.properties, id);
-    if (!p) return head('Not found', { back: 'properties' });
+    if (!p || p.deleted) return `${head('Property not found', { back: 'properties' })}<div class="empty">It may have been deleted.</div>`;
     const units = state.units.filter((u) => u.propertyId === p.id);
     const care = state.caretakers.filter((c) => c.propertyIds.includes(p.id));
     const boarding = p.kind === 'boarding';
     const row = (u) => {
       const t = tenantIn(u);
       if (t) return tenantRow(t).replace(`<div class="meta">${esc(where(t))}</div>`, `<div class="meta">${esc(u.label)} · ${money(u.rent)}/${perLabel(u)}</div>`);
-      return `<div class="row-wrap"><div class="row static"><span class="tile neutral">${icon(boarding ? 'user' : 'door')}</span><div class="grow"><div class="title">${esc(u.label)}</div><div class="meta">Empty · ${money(u.rent)}/${perLabel(u)}</div></div></div><button class="btn sm" data-action="addTenant" data-unit="${u.id}">Add tenant</button></div>`;
+      return `<div class="row-wrap"><div class="row static"><span class="tile neutral">${icon(boarding ? 'user' : p.kind === 'shops' ? 'building' : 'door')}</span><div class="grow"><div class="title">${esc(u.label)}</div><div class="meta">Empty · ${money(u.rent)}/${perLabel(u)}</div></div></div><button class="btn sm" data-action="addTenant" data-unit="${u.id}">Add tenant</button></div>`;
     };
     // Boarding houses: one section per house, showing how many of its bed spaces are taken.
     const houses = boarding ? [...new Set(units.map(houseOf))] : [];
@@ -837,7 +849,10 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       ${boarding ? body.replace('<section class="section">', '<section class="section" style="margin-top:4px">') : body}
       <section class="section"><div class="section-head"><h2>Caretaker</h2><a href="#/caretakers">Manage</a></div>
         <div class="list">${care.length ? care.map((c) => `<div class="row static"><span class="avatar">${initials(c.name)}</span><div class="grow"><div class="title">${esc(c.name)}</div><div class="meta">${LH.prettyPhone(c.phone)} · records cash payments</div></div></div>`).join('') : '<div class="empty">No caretaker for this property.</div>'}</div>
-      </section>`;
+      </section>
+      <section class="section"><div class="list">
+        <button class="row" data-action="deleteProperty" data-id="${p.id}"><span class="tile neutral" style="color:var(--overdue)">${icon('x')}</span><div class="grow"><div class="title" style="color:var(--overdue)">Delete this property</div><div class="meta">Removes it from your list. You can undo straight after.</div></div></button>
+      </div></section>`;
   };
 
   L.notices = function () {
@@ -977,7 +992,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       <form data-form="deduction" autocomplete="off">
         <label class="field"><span class="label">Amount</span><div class="input-group"><span class="prefix">K</span><input class="input" name="amount" type="number" inputmode="decimal" min="1" step="0.01" required autofocus></div></label>
         <label class="field"><span class="label">What for</span><select class="input" name="reason">${LH.DEDUCTION_REASONS.map((r) => `<option>${r}</option>`).join('')}</select></label>
-        <label class="field"><span class="label">Property</span><select class="input" name="property"><option value="">All properties</option>${state.properties.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+        <label class="field"><span class="label">Property</span><select class="input" name="property"><option value="">All properties</option>${liveProps().map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
         <label class="field"><span class="label">Date</span><input class="input" name="date" type="date" value="${iso(t)}" max="${iso(t)}" required></label>
         <label class="field"><span class="label">Note <span class="faint" style="font-weight:400">(optional)</span></span><input class="input" name="note" placeholder="e.g. Plumber for Flat 4"></label>
         <button class="btn primary block lg" type="submit">Save deduction</button>
@@ -1678,7 +1693,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
           </button>
           <div class="pick-panel" id="pick-panel"><div class="pick-inner">
           <label class="pick-all"><input type="checkbox" data-input="pickAll" ${allOn ? 'checked' : ''}><span class="pick-box" aria-hidden="true">${icon('check', 'sm')}</span><span class="grow"><strong>Select all tenants</strong><span class="pick-sub">${all.length} tenants</span></span></label>
-          <div class="pick-props"><span class="pick-hint">Or tick everyone in one building:</span><div class="chips">${state.properties.map((p) => `<button type="button" class="chip" data-action="pickProperty" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div></div>
+          <div class="pick-props"><span class="pick-hint">Or tick everyone in one building:</span><div class="chips">${liveProps().map((p) => `<button type="button" class="chip" data-action="pickProperty" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div></div>
           <div class="pick-list">${all.map((t) => `<label class="pick-row"><input type="checkbox" name="to" value="${t.id}" data-input="pickOne" ${picked.has(t.id) ? 'checked' : ''}><span class="pick-box" aria-hidden="true">${icon('check', 'sm')}</span><span class="grow"><span class="pick-name">${esc(t.name)}</span><span class="pick-sub">${esc(where(t))}</span></span></label>`).join('')}</div>
           <div class="pick-count" id="pick-count" aria-live="polite">${pickCountText(picked.size, all.length)}</div>
           <button type="button" class="btn block mt-s" data-action="togglePicks">Done</button>
@@ -1719,7 +1734,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   const houseValue = (u) => `h:${u.propertyId}|${houseOf(u)}`;
   function placeChoices(t) {
     const groups = [];
-    state.properties.forEach((p) => {
+    liveProps().forEach((p) => {
       const us = state.units.filter((u) => u.propertyId === p.id);
       const opts = [];
       if (p.kind === 'boarding') {
@@ -1896,7 +1911,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       c: String(d.c || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12),
       t: { id: t.id, name: text(t.name) || 'Tenant', phone, unitId: u.id, since: /^\d{4}-\d{2}-\d{2}$/.test(t.since) ? t.since : iso(T()), dueDay: Math.round(dueDay), every: Math.round(num(t.every, 1, 12) || 1), deposit: num(t.deposit, 0, 10000000) || 0, lang: ['en', 'bem', 'nya'].includes(t.lang) ? t.lang : 'en' },
       u: { id: u.id, label: text(u.label) || 'Home', rent, period: u.period === 'term' ? 'term' : 'month', service: num(u.service, 0, 10000000) || 0, serviceName: text(u.serviceName), propertyId: p.id },
-      p: { id: p.id, name: text(p.name) || 'Property', area: text(p.area), kind: ['flats', 'boarding', 'house'].includes(p.kind) ? p.kind : 'flats' },
+      p: { id: p.id, name: text(p.name) || 'Property', area: text(p.area), kind: ['flats', 'boarding', 'house', 'shops'].includes(p.kind) ? p.kind : 'flats' },
       l: { name: text(l.name) || 'Your landlord', phone: LH.cleanPhone(l.phone), business: text(l.business) },
     };
   }
@@ -1961,13 +1976,14 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         <div class="field"><span class="label">What kind of property?</span><div class="seg">
           <label><input type="radio" name="kind" value="flats" checked data-input="propKind"><span>Flats or houses</span></label>
           <label><input type="radio" name="kind" value="boarding" data-input="propKind"><span>Boarding house (bed spaces)</span></label>
+          <label><input type="radio" name="kind" value="shops" data-input="propKind"><span>Shops</span></label>
         </div></div>
         <div id="flats-fields">
           <div class="btn-row">
-            <label class="field" style="flex:1"><span class="label">How many flats or houses?</span><input class="input" name="count" type="number" min="1" max="60" value="4"></label>
+            <label class="field" style="flex:1"><span class="label" id="count-label">How many flats or houses?</span><input class="input" name="count" type="number" min="1" max="60" value="4"></label>
             <label class="field" style="flex:1"><span class="label">Rent each, per month</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" value="3500"></div></label>
           </div>
-          <label class="field"><span class="label">Service charge each <span class="faint" style="font-weight:400">(optional)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="service" type="number" min="0" value="0"></div><div class="help">For example LWSC water, ZESCO share or security.</div></label>
+          <label class="field"><span class="label">Service charge each <span class="faint" style="font-weight:400">(optional)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="service" type="number" min="0" value="0"></div><div class="help" id="service-help">For example LWSC water, ZESCO share or security.</div></label>
         </div>
         <div id="boarding-fields" hidden>
           <label class="field"><span class="label">How many houses are on this property?</span>
@@ -2031,9 +2047,11 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
           <button class="btn primary block lg" type="submit">Add bed spaces</button>
         </form>`);
     }
-    openSheet(`${sheetHead(`Add a house or flat to ${p.name}`)}
+    const shop = p.kind === 'shops';
+    const next = state.units.filter((u) => u.propertyId === pid).length + 1;
+    openSheet(`${sheetHead(shop ? `Add a shop to ${esc(p.name)}` : `Add a house or flat to ${esc(p.name)}`)}
       <form data-form="addUnit" autocomplete="off"><input type="hidden" name="pid" value="${pid}">
-        <label class="field"><span class="label">Name or number</span><input class="input" name="label" required placeholder="e.g. Flat 7 or House 3" autofocus></label>
+        <label class="field"><span class="label">Name or number</span><input class="input" name="label" required placeholder="${shop ? `e.g. Shop ${next}` : 'e.g. Flat 7 or House 3'}" autofocus></label>
         <div class="btn-row">
           <label class="field" style="flex:1"><span class="label">Rent</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" required></div></label>
           <label class="field" style="flex:1"><span class="label">Charged per</span><select class="input" name="period"><option value="month" selected>Month</option><option value="term">Term</option></select></label>
@@ -2048,7 +2066,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       <form data-form="inviteCaretaker" autocomplete="off">
         <label class="field"><span class="label">Name</span><input class="input" name="name" required autofocus></label>
         <label class="field"><span class="label">Phone number</span><div class="input-group"><span class="prefix">+260</span><input class="input" name="phone" type="tel" inputmode="tel" required placeholder="97 123 4567"></div></label>
-        <div class="field"><span class="label">Properties they look after</span><div class="stack">${state.properties.map((p) => `<label class="check"><input type="checkbox" name="props" value="${p.id}"><span>${esc(p.name)}</span></label>`).join('')}</div></div>
+        <div class="field"><span class="label">Properties they look after</span><div class="stack">${liveProps().map((p) => `<label class="check"><input type="checkbox" name="props" value="${p.id}"><span>${esc(p.name)}</span></label>`).join('')}</div></div>
         <button class="btn primary block lg" type="submit">Send invite</button>
       </form>`);
   }
@@ -2203,6 +2221,49 @@ We never sell your data or use it for adverts.</div>
     remind: (d) => remindSheet([d.id]),
     remindAll: () => remindSheet(activeTenants().filter((t) => { const a = acct(t); return a.status === 'overdue' || (a.status === 'partial' && a.daysLate > 0); }).map((t) => t.id)),
     tenantFilter: (d) => { ui.tenantFilter = d.f; render(); },
+    propFilter: (d) => {
+      ui.propFilter = d.f; render();
+      // Keep the chosen chip in view; the row starts scrolled back to "All" after redrawing.
+      const chip = document.querySelector('[data-action="propFilter"].active');
+      if (chip) chip.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    },
+    deleteProperty: (d) => {
+      const p = byId(state.properties, d.id); if (!p) return;
+      const units = state.units.filter((u) => u.propertyId === p.id);
+      const living = units.map(tenantIn).filter(Boolean);
+      if (living.length) {
+        return openSheet(`${sheetHead(`Can't delete ${esc(p.name)} yet`)}
+          <p class="muted">${living.length} tenant${living.length === 1 ? ' still rents' : 's still rent'} here. End their tenancy or move them to another place first, so their rent records stay correct.</p>
+          <div class="list mt">${living.map((t) => tenantRow(t)).join('')}</div>
+          <button class="btn block mt" data-action="closeSheet">OK</button>`);
+      }
+      const past = state.tenants.some((t) => units.some((u) => u.id === t.unitId));
+      openSheet(`${sheetHead(`Delete ${esc(p.name)}?`)}
+        <p class="muted">${units.length} ${p.kind === 'boarding' ? 'bed space' : p.kind === 'shops' ? 'shop' : 'house or flat'}${units.length === 1 ? '' : 's'} will be removed from your properties.${past ? ' Rent records of past tenants are kept, so your reports and ZRA totals don’t change.' : ''}</p>
+        <div class="btn-row mt"><button class="btn" data-action="closeSheet">Cancel</button><button class="btn danger" data-action="confirmDeleteProperty" data-id="${p.id}">Delete</button></div>`);
+    },
+    confirmDeleteProperty: (d) => {
+      const p = byId(state.properties, d.id); if (!p) return;
+      const units = state.units.filter((u) => u.propertyId === p.id);
+      if (units.some((u) => tenantIn(u))) return toast('Someone still rents here. End their tenancy first.');
+      // Keep a copy so Undo can put everything back exactly as it was.
+      const before = JSON.stringify({ properties: state.properties, units: state.units, caretakers: state.caretakers });
+      const past = state.tenants.some((t) => units.some((u) => u.id === t.unitId));
+      if (past) p.deleted = iso(T());
+      else {
+        state.properties = state.properties.filter((x) => x.id !== p.id);
+        state.units = state.units.filter((u) => u.propertyId !== p.id);
+      }
+      state.caretakers.forEach((c) => { c.propertyIds = c.propertyIds.filter((id) => id !== p.id); });
+      log(`Deleted ${p.name}`);
+      save(); closeSheet(); go('properties');
+      toast(`${p.name} deleted`, () => {
+        const b = JSON.parse(before);
+        state.properties = b.properties; state.units = b.units; state.caretakers = b.caretakers;
+        log(`Undid deleting ${p.name}`);
+        save(); render(); toast(`${p.name} is back`);
+      });
+    },
     addTenant: (d) => addTenantSheet(d.unit),
     addProperty: () => addPropertySheet(),
     addUnit: (d) => addUnitSheet(d.id),
@@ -2574,7 +2635,7 @@ We never sell your data or use it for adverts.</div>
       save(); closeSheet(); go('collections/' + x.date.slice(0, 4)); render(); toast(`${money(amount)} deduction saved`);
     },
     addProperty: (f) => {
-      const p = { id: LH.uid('P'), name: f.get('name').trim(), area: f.get('area').trim(), kind: f.get('kind') };
+      const p = { id: LH.uid('P'), name: f.get('name').trim(), area: f.get('area').trim(), kind: ['flats', 'boarding', 'shops'].includes(f.get('kind')) ? f.get('kind') : 'flats' };
       if (p.kind === 'boarding') {
         // Houses, each with its own bed spaces: "House 1 · Bed 1", "House 1 · Bed 2" …
         const names = f.getAll('houseName').map((s) => s.trim()), beds = f.getAll('houseBeds').map((b) => Math.round(Number(b)));
@@ -2592,10 +2653,11 @@ We never sell your data or use it for adverts.</div>
       const n = Math.min(60, Math.max(1, Number(f.get('count')) || 1)), rent = Number(f.get('rent'));
       if (!(rent > 0)) return toast('Enter the rent for each one');
       state.properties.push(p);
+      const word = p.kind === 'shops' ? 'Shop' : 'House';
       for (let i = 1; i <= n; i++) {
-        state.units.push({ id: LH.uid('U'), propertyId: p.id, label: `House ${i}`, rent, service: Number(f.get('service')) || 0, serviceName: 'Service charge', period: 'month' });
+        state.units.push({ id: LH.uid('U'), propertyId: p.id, label: `${word} ${i}`, rent, service: Number(f.get('service')) || 0, serviceName: 'Service charge', period: 'month' });
       }
-      log(`Added ${p.name} with ${n} house${n === 1 ? '' : 's'}`);
+      log(`Added ${p.name} with ${n} ${word.toLowerCase()}${n === 1 ? '' : 's'}`);
       save(); closeSheet(); go('property/' + p.id); toast(`${p.name} added`);
     },
     readSms: (f) => smsResults(LH.parseMoneySms(f.get('sms'))),
@@ -2680,8 +2742,11 @@ We never sell your data or use it for adverts.</div>
     pickOne: (el) => syncPicks(el.closest('form')),
     // Add property: show the fields for the kind chosen.
     propKind: (el) => {
-      const form = el.closest('form'), boarding = form.querySelector('[name=kind]:checked').value === 'boarding';
+      const form = el.closest('form'), kind = form.querySelector('[name=kind]:checked').value, boarding = kind === 'boarding';
       form.querySelector('#flats-fields').hidden = boarding; form.querySelector('#boarding-fields').hidden = !boarding;
+      form.querySelector('#count-label').textContent = kind === 'shops' ? 'How many shops?' : 'How many flats or houses?';
+      form.querySelector('#service-help').textContent = kind === 'shops' ? 'For example security, cleaning or a share of ZESCO.' : 'For example LWSC water, ZESCO share or security.';
+      form.name.placeholder = kind === 'shops' ? 'e.g. Cairo Road Shops' : kind === 'boarding' ? 'e.g. Mutende Student Lodge' : 'e.g. Chelstone Flats';
     },
     // Number of houses changed: add or remove rows, keeping what was already typed.
     houseCount: (el) => {

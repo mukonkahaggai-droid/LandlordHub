@@ -233,6 +233,7 @@
         { id: 'P1', name: 'Kabulonga Flats', area: 'Kabulonga, Lusaka', kind: 'flats' },
         { id: 'P2', name: 'Mutende Student Lodge', area: 'Kalingalinga, Lusaka', kind: 'boarding' },
         { id: 'P3', name: 'Parklands House', area: 'Parklands, Kitwe', kind: 'house' },
+        { id: 'P4', name: 'Cairo Road Shops', area: 'Cairo Road, Lusaka', kind: 'shops' },
       ],
       units: [
         { id: 'U1', propertyId: 'P1', label: 'Flat 1', rent: 5500, service: 350, serviceName: 'Water & security', period: 'month' },
@@ -248,6 +249,9 @@
         { id: 'U11', propertyId: 'P2', label: 'Room 3 · Bed A', rent: 3500, service: 0, period: 'term' },
         { id: 'U12', propertyId: 'P2', label: 'Room 3 · Bed B', rent: 3500, service: 0, period: 'term' },
         { id: 'U13', propertyId: 'P3', label: 'Main house', rent: 7500, service: 0, period: 'month' },
+        { id: 'U14', propertyId: 'P4', label: 'Shop 1', rent: 9000, service: 500, serviceName: 'Security & cleaning', period: 'month' },
+        { id: 'U15', propertyId: 'P4', label: 'Shop 2', rent: 9000, service: 500, serviceName: 'Security & cleaning', period: 'month' },
+        { id: 'U16', propertyId: 'P4', label: 'Shop 3', rent: 7500, service: 500, serviceName: 'Security & cleaning', period: 'month' },
       ],
       tenants: [
         { id: 'T1', name: 'Chanda Mulenga', phone: '0965123344', unitId: 'U1', since: mo(14), dueDay: 1, deposit: 5500, lang: 'bem', p: 'ontime' },
@@ -261,6 +265,8 @@
         { id: 'T9', name: 'Precious Nkhoma', phone: '0965509871', unitId: 'U9', since: termStart(2), dueDay: 7, deposit: 0, lang: 'nya', p: 'ontime' },
         { id: 'T10', name: 'Daliso Mbewe', phone: '0975567012', unitId: 'U10', since: termStart(1), dueDay: 7, deposit: 0, lang: 'nya', p: 'late' },
         { id: 'T11', name: 'Kelvin Chileshe', phone: '0963378800', unitId: 'U13', since: mo(30), dueDay: 25, deposit: 7500, lang: 'en', p: 'ontime' },
+        { id: 'T12', name: 'Mutale Banda', phone: '0966540781', unitId: 'U14', since: mo(11), dueDay: 1, deposit: 18000, lang: 'en', p: 'ontime' },
+        { id: 'T13', name: 'Grace Zulu', phone: '0973301288', unitId: 'U15', since: mo(5), dueDay: 5, deposit: 9000, lang: 'bem', p: 'partial' },
       ],
       payments: [],
       notices: [
