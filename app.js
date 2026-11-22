@@ -1977,13 +1977,13 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   function addPropertySheet() {
     openSheet(`${sheetHead('Add a property')}
       <form data-form="addProperty" autocomplete="off">
-        <label class="field"><span class="label">Property name</span><input class="input" name="name" required placeholder="e.g. Chelstone Flats" autofocus></label>
-        <label class="field"><span class="label">Area and town</span><input class="input" name="area" required placeholder="e.g. Chelstone, Lusaka"></label>
         <div class="field"><span class="label">What kind of property?</span><div class="seg">
           <label><input type="radio" name="kind" value="flats" checked data-input="propKind"><span>Flats or houses</span></label>
           <label><input type="radio" name="kind" value="boarding" data-input="propKind"><span>Boarding house (bed spaces)</span></label>
           <label><input type="radio" name="kind" value="shops" data-input="propKind"><span>Shops</span></label>
-        </div></div>
+        </div><div class="help">Choose this first: the questions below change to match.</div></div>
+        <label class="field"><span class="label">Property name</span><input class="input" name="name" required placeholder="e.g. Chelstone Flats"></label>
+        <label class="field"><span class="label">Area and town</span><input class="input" name="area" required placeholder="e.g. Chelstone, Lusaka"></label>
         <div id="flats-fields">
           <div class="btn-row">
             <label class="field" style="flex:1"><span class="label" id="count-label">How many flats or houses?</span><input class="input" name="count" type="number" min="1" max="60" value="4"></label>
