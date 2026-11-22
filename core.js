@@ -352,4 +352,81 @@
     }
     return out.filter((x) => x.date <= LH.iso(today));
   };
+
+  /* ---------- Rent record, for a tenant's rent reference ----------
+     Looks at every rent period that has already fallen due and, spending the tenant's confirmed
+     payments oldest first, finds the day each one was paid in full. "On time" means paid in full
+     by the due date, with a few days' grace, because mobile money and bank transfers can take a
+     day or two to show. Only payments the landlord recorded or confirmed count. */
+  LH.REF_GRACE_DAYS = 3;
+  LH.rentRecord = function (state, t, today) {
+    const u = state.units.find((x) => x.id === t.unitId);
+    const due = LH.periods(t, u, today).filter((p) => p.due <= today);
+    const pays = state.payments.filter((p) => p.tenantId === t.id && p.status === 'confirmed')
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    let i = 0, left = 0, lastDate = null;
+    const periods = due.map((per) => {
+      let need = per.amount;
+      while (need > 0.001) {
+        if (left <= 0.001) {
+          if (i >= pays.length) break;
+          left = pays[i].amount; lastDate = LH.parse(pays[i].date); i++;
+        }
+        const take = Math.min(need, left);
+        need -= take; left -= take;
+      }
+      const paid = need <= 0.001;
+      const onTime = paid && lastDate <= LH.addDays(per.due, LH.REF_GRACE_DAYS);
+      return { label: per.label, due: per.due, amount: per.amount, paid, paidOn: paid ? lastDate : null, onTime,
+        state: onTime ? 'ontime' : paid ? 'late' : 'unpaid' };
+    });
+    let streak = 0, best = 0;
+    periods.forEach((p) => { streak = p.onTime ? streak + 1 : 0; best = Math.max(best, streak); });
+    const word = u.period === 'term' ? 'term' : LH.every(t, u) === 1 ? 'month' : 'payment';
+    return {
+      periods, word,
+      total: periods.length,
+      onTime: periods.filter((p) => p.state === 'ontime').length,
+      late: periods.filter((p) => p.state === 'late').length,
+      unpaid: periods.filter((p) => p.state === 'unpaid').length,
+      bestStreak: best,
+      currentStreak: streak,
+      totalPaid: pays.reduce((s, p) => s + p.amount, 0),
+      since: LH.parse(t.since),
+    };
+  };
+  // A short code to quote when checking a reference, e.g. "R-7KQ2MD". The same tenant on the same
+  // day always gets the same code.
+  LH.referenceCode = function (t, today) {
+    const s = `${t.id}|${t.since}|${LH.iso(today)}`;
+    let h = 2166136261;
+    for (let k = 0; k < s.length; k++) { h ^= s.charCodeAt(k); h = Math.imul(h, 16777619) >>> 0; }
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let out = '';
+    for (let k = 0; k < 6; k++) { out += A[h % A.length]; h = Math.floor(h / A.length) || (h ^ 0x9e3779b9) >>> 0; }
+    return 'R-' + out;
+  };
+
+  /* ---------- Sample messages for the demo ----------
+     A late tenant saying when they'll pay, and a reply to a notice with the landlord's answer. */
+  LH.seedMessages = function (state, today) {
+    const out = [];
+    const t3 = state.tenants.find((t) => t.id === 'T3'), t2 = state.tenants.find((t) => t.id === 'T2');
+    const unitP = (t) => (state.units.find((u) => u.id === t.unitId) || {}).propertyId || '';
+    const at = (days, h) => { const d = LH.addDays(today, days); d.setHours(h, 0, 0, 0); return d.getTime(); };
+    if (t3) {
+      let fri = LH.addDays(today, 1);
+      while (fri.getDay() !== 5) fri = LH.addDays(fri, 1);
+      out.push({ id: 'M1', tenantId: t3.id, propertyId: unitP(t3), from: 'tenant', about: 'rent', promise: LH.iso(fri),
+        text: `Sorry for the delay with the rent. I get paid this week, so I'll pay on ${LH.fmtLong(fri)}.`, date: LH.iso(today), at: at(0, 8), read: false });
+    }
+    const n1 = state.notices.find((n) => n.id === 'N1');
+    if (t2 && n1) {
+      out.push({ id: 'M2', tenantId: t2.id, propertyId: unitP(t2), from: 'tenant', about: n1.id, promise: null,
+        text: 'Thank you for letting us know. Will the water be back by Saturday evening?', date: LH.iso(LH.addDays(today, -2)), at: at(-2, 18), read: true });
+      out.push({ id: 'M3', tenantId: t2.id, propertyId: unitP(t2), from: 'landlord', about: n1.id, promise: null,
+        text: 'Yes, LWSC says it should be back by 15:00.', date: LH.iso(LH.addDays(today, -2)), at: at(-2, 19), read: true });
+    }
+    return out;
+  };
 })();

@@ -842,3 +842,32 @@ body { letter-spacing: -0.005em; font-feature-settings: "tnum" 1; }
 .sms-ask { margin-top: 10px; }
 .sms-ask.done { display: flex; gap: 12px; align-items: center; }
 .sms-ask .meta { color: var(--muted); font-size: calc(13px * var(--ts)); }
+
+/* ---------- Messages between tenants and their landlord ---------- */
+.thread { display: flex; flex-direction: column; gap: 8px; }
+.thread.mb { margin-bottom: 16px; }
+.bubble { max-width: 86%; padding: 9px 12px 7px; border-radius: 16px; font-size: calc(14.5px * var(--ts)); line-height: 1.4; overflow-wrap: anywhere; }
+.bubble.theirs { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+.bubble.mine { align-self: flex-end; background: var(--accent-soft); border: 1px solid transparent; border-bottom-right-radius: 5px; }
+.bubble-tag { font-size: calc(11.5px * var(--ts)); font-weight: 650; color: var(--muted); margin-bottom: 2px; }
+.bubble-text { white-space: pre-wrap; }
+.bubble-promise { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-weight: 650; color: var(--accent); font-size: calc(13px * var(--ts)); }
+.bubble-meta { margin-top: 4px; font-size: calc(11.5px * var(--ts)); color: var(--faint); }
+.meta.promise { color: var(--accent); font-weight: 600; }
+.meta.promise.past, .promise-line.past { color: var(--overdue); }
+.promise-line { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: calc(13.5px * var(--ts)); font-weight: 600; color: var(--accent); }
+.chips.wrap { flex-wrap: wrap; overflow: visible; }
+
+/* ---------- Rent reference ---------- */
+.ref-card { padding: 18px; }
+.ref-name { font: 680 calc(21px * var(--ts))/1.2 var(--font-display); letter-spacing: -.02em; margin-top: 2px; }
+.ref-code { font-weight: 700; font-size: calc(13px * var(--ts)); letter-spacing: .06em; padding: 4px 8px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.ref-score { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 16px 0 10px; font-weight: 600; font-size: calc(15px * var(--ts)); }
+.ref-score .num { font: 700 calc(28px * var(--ts))/1 var(--font-display); }
+.ref-strip { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; }
+.ref-strip i { display: block; height: 18px; border-radius: 4px; }
+.ref-strip i.ontime, .ref-legend i.ontime { background: var(--paid); }
+.ref-strip i.late, .ref-legend i.late { background: var(--partial); }
+.ref-strip i.unpaid, .ref-legend i.unpaid { background: var(--overdue); }
+.ref-legend { margin-top: 8px; }
+.ref-landlord { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: calc(14px * var(--ts)); }

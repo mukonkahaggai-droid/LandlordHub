@@ -26,6 +26,8 @@ landlords/{landlordUid}                 name, phone (+260…), business, email, 
   payments/{id}                         tenantId, propertyId, amount, date, method, ref, status, by, byName, receipt, smsKey
   notices/{id}                          title, body, audience ('all' or a propertyId), channels, date
   requests/{id}                         tenantId, propertyId, category, text, status (open | progress | done), date
+  messages/{id}                         tenantId, propertyId, from (tenant | landlord), about ('rent', a notice id or null),
+                                        promise (a date the tenant says they'll pay, or null), text (max 500), date, at, read
   activity/{id}                         date, who, byPhone, text
   deductions/{id}                       amount, reason, propertyId, date, note
   private/settings                      reminders, remindedAt
@@ -60,6 +62,7 @@ As a backstop, the rules refuse any record that contains `nrc`, `nrcVerified`, `
 | Payments | everything | read for their properties; **add cash only**, confirmed, with a receipt | read their own; **report** a payment as *waiting for confirmation* |
 | Notices | everything | read for their properties and "all" | read for their property and "all" |
 | Repairs | everything | read for their properties; change **only the status** | read their own; report a new one |
+| Messages | read all, write to any tenant, mark tenants' messages read | nothing | read their own conversation, write to their landlord, mark the landlord's messages read |
 | Activity log | everything | add entries under their own number | add entries under their own number |
 | Deductions, settings | everything | nothing | nothing |
 | Receipt counter | read, +1 | read, +1 | nothing |
@@ -80,5 +83,8 @@ A person who isn't signed in, or is signed in but isn't the landlord or one of t
   number on a new phone gives the same account, so the records follow them.
 - **Receipt numbers:** take the next number from `counters/receipts` in a transaction when online.
   Offline, the app needs a temporary receipt number that is swapped for a real one when it syncs.
+- **Rent references:** a reference is worked out from the landlord's own payment records, so a tenant can't type
+  it in. Today a future landlord checks it by calling the landlord named on it and quoting its code (`R-…`).
+  Once records are online, a read-only `references/{code}` record could let them check it by link instead.
 - **One phone, several landlords:** a tenant who rents from two landlords has two `members` records.
   The app needs a "choose landlord" step for that case.

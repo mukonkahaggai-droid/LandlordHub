@@ -27,6 +27,8 @@
     if (stripIds(state)) save();
     // Deductions were added later: give older saved data a sample history too.
     if (!Array.isArray(state.deductions)) { state.deductions = LH.seedDeductions(state, LH.today()); save(); }
+    // Messages were added later: start with a couple of sample replies.
+    if (!Array.isArray(state.messages)) { state.messages = LH.seedMessages(state, LH.today()); save(); }
     try { session = JSON.parse(localStorage.getItem(SKEY)); } catch (e) { session = null; }
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage full or blocked */ } }
@@ -223,6 +225,11 @@
         const t = byId(state.tenants, r.tenantId);
         add('req:' + r.id, 'tool', `New repair: ${r.category}`, `${t ? t.name + ' · ' : ''}${fmtDay(parse(r.date))}`, 'requests');
       });
+      newFromTenants().forEach((m) => {
+        const t = byId(state.tenants, m.tenantId); if (!t) return;
+        const n = m.about && m.about !== 'rent' ? byId(state.notices, m.about) : null;
+        add('msg:' + m.id, 'chat', `${t.name}: ${snippet(m.text, 60)}`, m.promise ? `Will pay on ${fmtDay(parse(m.promise))}` : n ? `Reply to “${n.title}”` : `Message · ${fmtDay(parse(m.date))}`, 'tenant/' + t.id);
+      });
     } else if (session.role === 'caretaker') {
       late(careTenants()).forEach(({ t, a }) => add(`late:${t.id}:${iso(a.dueDate)}`, 'clock', `${t.name} is ${a.daysLate} day${a.daysLate === 1 ? '' : 's'} late`, `${money(a.balance)} owed · ${where(t)}`, 'tenants', 'warn'));
     } else {
@@ -233,6 +240,7 @@
       const since = iso(LH.addDays(T(), -30));
       myNotices(t).filter((n) => n.date >= since).forEach((n) => add('notice:' + n.id, 'notice', n.title, `Notice · ${fmtDay(parse(n.date))}`, 'notices'));
       state.requests.filter((r) => r.tenantId === t.id && r.status !== 'open').forEach((r) => add(`req:${r.id}:${r.status}`, 'tool', `${r.category} repair: ${r.status === 'done' ? 'done' : 'in progress'}`, fmtDay(parse(r.date)), 'requests'));
+      newFromLandlord(t.id).forEach((m) => add('lmsg:' + m.id, 'chat', `${first(state.landlord.name)}: ${snippet(m.text, 60)}`, `Message · ${fmtDay(parse(m.date))}`, 'home'));
     }
     return out;
   }
@@ -274,7 +282,7 @@
     if (!session) { app.innerHTML = loginView(); return; }
     const views = { landlord: L, tenant: TN, caretaker: C }[session.role];
     const view = views[a] || views.home;
-    const active = NAV[session.role].some((n) => n[0] === a) ? a : ({ tenant: 'tenants', property: 'properties', collections: 'home', payments: 'home', reports: 'more', requests: 'more', caretakers: 'more', reminders: 'more', activity: session.role === 'landlord' ? 'more' : 'activity', privacy: 'more' }[a] || 'home');
+    const active = NAV[session.role].some((n) => n[0] === a) ? a : ({ tenant: 'tenants', property: 'properties', collections: 'home', payments: 'home', reports: 'more', requests: 'more', caretakers: 'more', reminders: 'more', activity: session.role === 'landlord' ? 'more' : 'activity', privacy: 'more', messages: 'more', reference: session.role === 'landlord' ? 'tenants' : 'home' }[a] || 'home');
     app.innerHTML = shell(view(b), active);
     const r = location.hash;
     if (r !== lastRoute) {
@@ -411,7 +419,7 @@
     const a = acct(t);
     return `<a class="row" href="#/${o.href || 'tenant/' + t.id}">
       <span class="avatar">${initials(t.name)}</span>
-      <div class="grow"><div class="title">${esc(t.name)}</div><div class="meta">${o.meta || esc(where(t))}</div>${isLinked(t) ? '' : '<div class="meta link-wait">Not on the app yet</div>'}</div>
+      <div class="grow"><div class="title">${esc(t.name)}</div><div class="meta">${o.meta || esc(where(t))}</div>${(() => { const pr = promiseOf(t); return pr ? `<div class="meta promise${pr.past ? ' past' : ''}">${esc(promiseText(pr))}</div>` : ''; })()}${isLinked(t) ? '' : '<div class="meta link-wait">Not on the app yet</div>'}</div>
       ${o.noEnd ? '' : `<div class="end">${pill(a)}<span class="small muted num">${a.status === 'paid' ? (a.aheadUntil ? 'to ' + a.aheadUntil : '') : money(a.balance)}</span></div>`}
     </a>`;
   }
@@ -422,6 +430,137 @@
       <div class="grow"><div class="title">${o.self ? esc(p.method) : esc(t ? t.name : 'Tenant')}</div><div class="meta">${fmtDay(parse(p.date))} · ${o.self ? esc(p.receipt || '') : esc(p.method)}${p.by === 'caretaker' && !o.self ? ' · by ' + esc(first(p.byName)) : ''}</div>${o.receiptNo && p.receipt ? `<div class="meta">Receipt ${esc(p.receipt)}</div>` : ''}</div>
       <div class="end"><span class="amount" style="font-weight:700">${money(p.amount)}</span>${o.receiptNo ? '<span class="small" style="color:var(--accent);font-weight:650">View receipt</span>' : ''}</div>
     </button>`;
+  }
+
+  /* ---------- Messages: tenants can reply to their landlord ----------
+     A tenant answers a notice or their rent reminder ("I'll pay on Friday") instead of phoning.
+     The landlord sees it on the tenant's page, in Messages and in notifications, and can answer.
+     Until records sync online (Phase 3), messages stay on the phone they were written on. */
+  const messages = () => (state.messages = state.messages || []);
+  const threadOf = (tid) => messages().filter((m) => m.tenantId === tid).sort((a, b) => a.at - b.at);
+  const newFromTenants = () => messages().filter((m) => m.from === 'tenant' && !m.read);
+  const newFromLandlord = (tid) => messages().filter((m) => m.tenantId === tid && m.from === 'landlord' && !m.read);
+  const snippet = (text, n) => { const s = String(text || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  const clockTime = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  // The latest "I'll pay on …" day from a tenant who still owes rent (ignored once it's 2 weeks old).
+  function promiseOf(t) {
+    if (acct(t).balance <= 0) return null;
+    const m = [...threadOf(t.id)].reverse().find((x) => x.from === 'tenant' && x.promise);
+    if (!m || m.promise < iso(LH.addDays(T(), -14))) return null;
+    return { date: parse(m.promise), past: m.promise < iso(T()) };
+  }
+  const promiseText = (pr) => (pr.past ? `Said they'd pay by ${fmtDay(pr.date)}` : `Will pay on ${LH.fmtLong(pr.date)}`);
+
+  function bubble(m, viewer, withName) {
+    const mine = m.from === viewer;
+    const t = byId(state.tenants, m.tenantId);
+    const n = m.about && m.about !== 'rent' ? byId(state.notices, m.about) : null;
+    const tag = n ? `Re: ${n.title}` : m.about === 'rent' ? 'About rent' : '';
+    const who = mine ? 'You' : m.from === 'landlord' ? first(state.landlord.name) : withName && t ? t.name : t ? first(t.name) : 'Tenant';
+    return `<div class="bubble ${mine ? 'mine' : 'theirs'}">
+      ${tag ? `<div class="bubble-tag">${esc(tag)}</div>` : ''}
+      <div class="bubble-text">${esc(m.text)}</div>
+      ${m.promise ? `<div class="bubble-promise">${icon('clock', 'sm')}Will pay on ${esc(LH.fmtLong(parse(m.promise)))}</div>` : ''}
+      <div class="bubble-meta">${esc(who)} · ${fmtDay(parse(m.date))}, ${clockTime(m.at)}</div>
+    </div>`;
+  }
+  function threadHTML(tid, viewer, limit) {
+    const list = threadOf(tid), shown = limit ? list.slice(-limit) : list;
+    return `<div class="thread">${shown.map((m) => bubble(m, viewer)).join('')}</div>`;
+  }
+
+  // The "write a message" sheet, for a tenant (to their landlord) or a landlord (to a tenant).
+  // about: 'rent', a notice id, or nothing for a general message.
+  function messageSheet(tenantId, about) {
+    const tenantSide = session.role === 'tenant';
+    const t = byId(state.tenants, tenantId); if (!t) return;
+    const n = about && about !== 'rent' ? byId(state.notices, about) : null;
+    const to = tenantSide ? first(state.landlord.name) : first(t.name);
+    const a = acct(t), owe = a.balance > 0;
+    const day = (d) => `<button type="button" class="chip" data-action="pickPromise" data-date="${iso(d)}">${esc(LH.fmtLong(d))}</button>`;
+    let promiseBlock = '';
+    if (tenantSide && about === 'rent' && owe) {
+      let fri = LH.addDays(T(), 1); while (fri.getDay() !== 5) fri = LH.addDays(fri, 1);
+      let eom = new Date(T().getFullYear(), T().getMonth() + 1, 0);
+      if (eom <= T()) eom = new Date(T().getFullYear(), T().getMonth() + 2, 0);
+      const days = [LH.addDays(T(), 1), fri, eom].filter((d, i, arr) => arr.findIndex((x) => iso(x) === iso(d)) === i);
+      promiseBlock = `<div class="field"><span class="label">When will you pay ${money(a.balance)}?</span>
+          <div class="chips wrap">${days.map(day).join('')}</div>
+          <label class="field mt-s" style="margin-bottom:0"><span class="small muted">Or choose a day</span><input class="input" type="date" name="promiseDate" min="${iso(LH.addDays(T(), 1))}" max="${iso(LH.addDays(T(), 90))}" data-input="promiseDate"></label></div>`;
+    }
+    const quick = tenantSide
+      ? (n ? ['Noted, thank you.', 'I have a question: '] : about === 'rent' ? ["I've already paid you. ", 'Can we talk about my rent? '] : ['Hello, '])
+      : ['Thank you, noted.', `Thank you, ${first(t.name)}. I'll look out for it.`, 'Please call me when you can.'];
+    const earlier = n ? threadOf(t.id).filter((m) => m.about === n.id) : threadOf(t.id).slice(-3);
+    openSheet(`${sheetHead(n ? `Reply to “${esc(n.title)}”` : `Message ${esc(to)}`)}
+      ${earlier.length ? `<div class="thread mb">${earlier.map((m) => bubble(m, tenantSide ? 'tenant' : 'landlord')).join('')}</div>` : ''}
+      <form data-form="sendMessage" autocomplete="off">
+        <input type="hidden" name="tenant" value="${t.id}"><input type="hidden" name="about" value="${esc(about || '')}"><input type="hidden" name="promise" value="">
+        ${promiseBlock}
+        <div class="chips wrap" style="margin-bottom:10px">${quick.map((q) => `<button type="button" class="chip" data-action="quickText" data-text="${esc(q)}">${esc(q.trim().replace(/:$/, ''))}</button>`).join('')}</div>
+        <label class="field"><span class="label">Your message</span><textarea class="input" name="text" rows="3" maxlength="500" required placeholder="${tenantSide ? `Write to ${esc(to)}…` : `Write to ${esc(to)}…`}"></textarea></label>
+        <button class="btn primary block lg" type="submit">${icon('send', 'sm')}Send to ${esc(to)}</button>
+        <button class="btn ghost block mt-s" type="button" data-action="messageWhatsApp" data-phone="${tenantSide ? state.landlord.phone : t.phone}">${icon('chat', 'sm')}Send by WhatsApp instead</button>
+      </form>`);
+  }
+
+  /* ---------- Rent reference: a tenant's payment record, to show a future landlord ----------
+     Built from the payments the landlord recorded or confirmed, so a tenant can't type it in.
+     A future landlord checks it by calling the landlord named on it and quoting the code. */
+  const plural = (word, n) => (n === 1 ? word : word + 's');
+  function howLong(since) {
+    const now = T();
+    let m = (now.getFullYear() - since.getFullYear()) * 12 + now.getMonth() - since.getMonth();
+    if (now.getDate() < since.getDate()) m--;
+    m = Math.max(0, m);
+    const y = Math.floor(m / 12), r = m % 12;
+    if (!y) return r ? `${r} ${plural('month', r)}` : 'less than a month';
+    return `${y} ${plural('year', y)}${r ? ` ${r} ${plural('month', r)}` : ''}`;
+  }
+  function referenceText(t) {
+    const rec = LH.rentRecord(state, t, T()), a = acct(t), p = propOf(unitOf(t)), L0 = state.landlord;
+    const code = LH.referenceCode(t, T());
+    return `Rent reference ${code}
+
+${t.name} has rented from ${L0.business || L0.name} in ${p.area || p.name} since ${LH.monthLabel(rec.since)} (${howLong(rec.since)}).
+
+Rent paid on time: ${rec.onTime} of ${rec.total} ${plural(rec.word, rec.total)} (${Math.round((rec.onTime / rec.total) * 100)}%)
+Longest run on time: ${rec.bestStreak} in a row
+Rent now: ${a.balance > 0 ? money(a.balance) + ' owed' : 'fully paid'}
+
+To check this reference, call ${L0.name} on ${LH.prettyPhone(L0.phone)} and quote ${code}.
+From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
+  }
+  function referenceView(t, back) {
+    const tenantSide = session.role === 'tenant';
+    if (!t) return head('Tenant not found', { back });
+    const rec = LH.rentRecord(state, t, T()), a = acct(t), p = propOf(unitOf(t)), L0 = state.landlord;
+    const title = head('Rent reference', { back, sub: tenantSide ? 'Your payment record, to show a future landlord' : `${esc(first(t.name))}'s payment record, for a future landlord` });
+    if (!rec.total) return `${title}<div class="empty">${icon('clock')}<div class="mt-s">${tenantSide ? 'Your' : esc(first(t.name)) + "'s"} rent record starts once the first rent has fallen due.</div></div>`;
+    const code = LH.referenceCode(t, T());
+    const strip = rec.periods.slice(-12);
+    const stateWord = { ontime: 'paid on time', late: 'paid late', unpaid: 'not paid yet' };
+    const pct = Math.round((rec.onTime / rec.total) * 100);
+    return `${title}
+      <article class="card ref-card" aria-label="Rent reference ${code}">
+        <div class="between" style="align-items:flex-start"><div><div class="r-cap">Rent reference</div><div class="ref-name">${esc(t.name)}</div></div><div class="ref-code num">${code}</div></div>
+        <div class="small muted mt-s">Renting in ${esc(p.area || p.name)} since ${LH.monthLabel(rec.since)} · ${howLong(rec.since)}</div>
+        <div class="ref-score"><span class="num">${rec.onTime}</span> of ${rec.total} ${plural(rec.word, rec.total)} paid on time <span class="pill ${pct >= 90 ? 'paid' : pct >= 70 ? 'partial' : 'overdue'}">${pct}%</span></div>
+        <div class="ref-strip" role="img" aria-label="Last ${strip.length} ${plural(rec.word, strip.length)}: ${strip.map((x) => `${x.label} ${stateWord[x.state]}`).join(', ')}">${strip.map((x) => `<i class="${x.state}" title="${esc(x.label)}: ${stateWord[x.state]}"></i>`).join('')}</div>
+        <div class="legend ref-legend"><span><i class="ontime"></i>On time</span><span><i class="late"></i>Late</span><span><i class="unpaid"></i>Not paid yet</span></div>
+        <dl class="kv mt">
+          <dt>Longest run on time</dt><dd>${rec.bestStreak} in a row</dd>
+          <dt>Paid late</dt><dd>${rec.late}</dd>
+          <dt>Rent now</dt><dd>${a.balance > 0 ? `${money(a.balance)} owed` : 'Fully paid'}</dd>
+          <dt>Paid through Landlord Hub</dt><dd>${money(rec.totalPaid)}</dd>
+        </dl>
+        <div class="ref-landlord"><div class="r-cap">Landlord who can confirm this</div><div class="r-strong">${esc(L0.business || L0.name)}</div><div>${esc(L0.name)} · <span class="num">${LH.prettyPhone(L0.phone)}</span></div></div>
+        <p class="small faint" style="margin:12px 0 0">Made on ${fmtDate(T())} from the rent records ${esc(L0.name)} keeps in Landlord Hub. On time means paid in full by the due date, allowing ${LH.REF_GRACE_DAYS} days for mobile money to arrive.</p>
+      </article>
+      <div class="btn-row mt"><button class="btn primary" data-action="shareReference" data-id="${t.id}">${icon('chat', 'sm')}Share on WhatsApp</button><button class="btn" data-action="copyReference" data-id="${t.id}">${icon('copy', 'sm')}Copy</button></div>
+      <p class="small muted mt">${tenantSide
+        ? `Send it to a landlord you want to rent from. They can call ${esc(first(L0.name))} and quote <strong>${code}</strong> to check it's real.`
+        : `Send it to ${esc(first(t.name))}, or to a landlord who asks about them. Anyone checking it can call you and quote <strong>${code}</strong>.`}</p>`;
   }
 
   /* =====================================================================
@@ -448,6 +587,7 @@
       pending.length && `<button class="todo-item" data-action="jump" data-to="sec-confirm">${pending.length} payment${pending.length === 1 ? '' : 's'} to confirm</button>`,
       overdue.length && `<button class="todo-item warn" data-action="jump" data-to="sec-attention">${overdue.length} tenant${overdue.length === 1 ? '' : 's'} late</button>`,
       newReq && `<a class="todo-item" href="#/requests">${newReq} new repair${newReq === 1 ? '' : 's'}</a>`,
+      newFromTenants().length && `<a class="todo-item" href="#/messages">${newFromTenants().length} new message${newFromTenants().length === 1 ? '' : 's'}</a>`,
     ].filter(Boolean);
 
     return `${head(`${greet}, ${first(state.landlord.name)}`, { sub: LH.fmtLong(t), action: `<button class="btn primary sm hide-mob" data-action="recordPayment">${icon('plus', 'sm')}Record payment</button>` })}
@@ -579,6 +719,11 @@
 
     const big = a.balance > 0 ? money(a.balance) : a.balance < 0 ? money(-a.balance) : 'K0';
     const bigLabel = a.balance > 0 ? 'Owes' : a.balance < 0 ? 'In credit' : 'Balance';
+    const pr = promiseOf(t), thread = threadOf(t.id);
+    const threadNow = thread.length ? threadHTML(t.id, 'landlord', 4) : '';
+    // Opening the tenant's page counts as reading their messages.
+    const unread = thread.filter((m) => m.from === 'tenant' && !m.read);
+    if (unread.length) { unread.forEach((m) => { m.read = true; }); save(); }
 
     return `${head(t.name, { back: 'tenants', sub: esc(where(t)), action: `<button class="btn sm" data-action="editTenant" data-id="${t.id}">${icon('edit', 'sm')}Edit</button>` })}
       <div class="cols"><div class="col">
@@ -586,6 +731,7 @@
         <div class="between"><div class="small muted" style="font-weight:550">${bigLabel}</div>${pill(a)}</div>
         <div style="font:680 32px/1.15 var(--font-display);letter-spacing:-.03em;margin:6px 0 4px" class="num">${big}</div>
         <div class="small muted">${statusLine(a)}</div>
+        ${pr ? `<div class="promise-line${pr.past ? ' past' : ''}">${icon('clock', 'sm')}<span>${esc(first(t.name))} ${pr.past ? `said they'd pay by ${fmtDay(pr.date)}` : `will pay on ${LH.fmtLong(pr.date)}`}</span></div>` : ''}
         <div class="btn-row mt">
           <button class="btn primary" data-action="recordPayment" data-id="${t.id}">${icon('plus', 'sm')}Add payment</button>
           ${a.balance > 0 ? `<button class="btn" data-action="remind" data-id="${t.id}">${icon('bell', 'sm')}Remind</button>` : ''}
@@ -600,6 +746,10 @@
         ${entries.length > 12 ? `<div class="small faint mt-s" style="padding:0 2px">Showing the latest 12 of ${entries.length} entries.</div>` : ''}
       </section>
       </div><div class="col">
+      <section class="section" id="messages"><div class="section-head"><h2>Messages</h2>${thread.length > 4 ? `<button class="link-btn" data-action="conversation" data-id="${t.id}">See all ${thread.length}</button>` : ''}</div>
+        <div class="card pad">${threadNow || `<div class="small muted">No messages yet. ${esc(first(t.name))} can reply to your notices and reminders in the app, so you don't have to call.</div>`}
+          <button class="btn block mt" data-action="messageTenant" data-id="${t.id}">${icon('chat', 'sm')}Write to ${esc(first(t.name))}</button></div>
+      </section>
       <section class="section"><div class="section-head"><h2>App account</h2></div>
         ${isLinked(t)
           ? `<div class="card pad link-card ok"><span class="at-icon">${icon('check')}</span><div class="grow"><strong>Linked to you</strong><div class="small muted">${t.linked ? `Joined on ${fmtDate(parse(t.linked.at))}. ` : ''}${esc(first(t.name))} sees their rent and receipts on their own phone.</div></div></div>`
@@ -629,6 +779,7 @@
         <div class="list">${reqs.length ? reqs.map(requestRow).join('') : '<div class="empty">No repair requests.</div>'}</div>
       </section>
       <section class="section"><div class="list">
+        <a class="row" href="#/reference/${t.id}"><span class="tile neutral">${icon('shield')}</span><div class="grow"><div class="title">Rent reference</div><div class="meta">Their payment record, for a future landlord</div></div>${icon('chev', 'chev')}</a>
         <button class="row" data-action="noticeTo" data-id="${t.id}"><span class="tile neutral">${icon('file')}</span><div class="grow"><div class="title">Send a letter</div><div class="meta">Late notice, rent change, notice to vacate</div></div>${icon('chev', 'chev')}</button>
         <button class="row" data-action="endTenancy" data-id="${t.id}"><span class="tile neutral">${icon('door')}</span><div class="grow"><div class="title">End tenancy</div><div class="meta">Frees ${esc(u.label)} for a new tenant</div></div>${icon('chev', 'chev')}</button>
       </div></section>
@@ -734,6 +885,26 @@
     </${canEdit ? 'button' : 'div'}>`;
   }
 
+  L.messages = function () {
+    const groups = {};
+    messages().forEach((m) => { (groups[m.tenantId] = groups[m.tenantId] || []).push(m); });
+    const rows = Object.keys(groups).map((tid) => {
+      const list = groups[tid].sort((x, y) => x.at - y.at);
+      return { t: byId(state.tenants, tid), last: list[list.length - 1], unread: list.filter((m) => m.from === 'tenant' && !m.read).length };
+    }).filter((r) => r.t).sort((x, y) => (y.unread > 0) - (x.unread > 0) || y.last.at - x.last.at);
+    return `${head('Messages', { back: 'more', sub: 'Replies from your tenants' })}
+      <div class="list">${rows.map(({ t, last, unread }) => {
+        const pr = promiseOf(t);
+        return `<a class="row" href="#/tenant/${t.id}">
+          <span class="avatar">${initials(t.name)}</span>
+          <div class="grow"><div class="title">${esc(t.name)}</div><div class="meta">${last.from === 'landlord' ? 'You: ' : ''}${esc(snippet(last.text, 80))}</div>${pr ? `<div class="meta promise${pr.past ? ' past' : ''}">${esc(promiseText(pr))}</div>` : ''}</div>
+          <div class="end"><span class="small muted">${fmtDay(parse(last.date))}</span>${unread ? `<span class="pill accent">${unread} new</span>` : ''}</div>
+        </a>`;
+      }).join('') || '<div class="empty">No messages yet. When a tenant replies to a notice or a rent reminder, it shows here.</div>'}</div>
+      <p class="small faint mt" style="padding:0 2px">Tenants reply from the app on their own phone. For now, messages reach you once records sync online; until then they can use “Send by WhatsApp instead”.</p>`;
+  };
+  L.reference = function (id) { return referenceView(byId(state.tenants, id), 'tenant/' + id); };
+
   L.more = function () {
     const item = (href, ic, title, meta) => `<a class="row" href="#/${href}"><span class="tile">${icon(ic)}</span><div class="grow"><div class="title">${title}</div><div class="meta">${meta}</div></div>${icon('chev', 'chev')}</a>`;
     return `${head('More')}
@@ -741,6 +912,7 @@
       ${smsAutoCard()}
       <div class="list mt">
         ${item('reports', 'chart', 'Reports & ZRA summary', 'Income by month and property')}
+        ${item('messages', 'chat', 'Messages from tenants', newFromTenants().length ? `${newFromTenants().length} new` : 'Replies to notices and reminders')}
         ${item('requests', 'tool', 'Repairs', `${state.requests.filter((r) => r.status !== 'done').length} open`)}
         ${item('reminders', 'bell', 'Automatic reminders', 'When and how tenants are reminded')}
         ${item('caretakers', 'key', 'Caretakers', `${state.caretakers.length} caretaker${state.caretakers.length === 1 ? '' : 's'}`)}
@@ -958,12 +1130,17 @@
     const recent = [...a.payments].reverse().slice(0, 3);
     const latest = myNotices(t)[0];
     const pend = state.payments.filter((x) => x.tenantId === t.id && x.status === 'pending');
+    const pr = promiseOf(t), thread = threadOf(t.id), rec = LH.rentRecord(state, t, T());
+    const lf = esc(first(state.landlord.name));
     return `${head(`Hello, ${first(t.name)}`, { sub: `${esc(u.label)} · ${esc(p.name)}` })}
       <div class="card balance-card">
         <div class="between"><div class="label">${owe ? 'You owe' : 'Your balance'}</div>${pill(a)}</div>
         <div class="big">${owe ? money(a.balance) : 'K0'}</div>
         <div class="muted small">${owe ? (a.daysLate ? `Was due ${fmtDate(a.dueDate)} · ${a.daysLate} days late` : `Due ${fmtDate(a.dueDate)}`) : (a.aheadUntil ? `You've paid up to ${a.aheadUntil}. Thank you!` : `All paid. Next rent due ${fmtDate(a.dueDate)}.`)}</div>
         <button class="btn primary block lg mt" data-action="pay">${owe ? `Pay ${money(a.balance)}` : 'Pay in advance'}</button>
+        ${owe ? (pr
+          ? `<div class="banner">${icon('clock', 'sm')}<span>You told ${lf} you'll pay ${pr.past ? 'by' : 'on'} ${LH.fmtLong(pr.date)}. <button class="link-btn" data-action="replyRent">Change</button></span></div>`
+          : `<button class="btn ghost block mt-s" data-action="replyRent">${icon('chat', 'sm')}Can't pay today? Tell ${lf} when</button>`) : ''}
         ${pend.length ? `<div class="banner">${icon('clock', 'sm')}<span>${money(sum(pend, (x) => x.amount))} you reported is waiting for ${esc(first(state.landlord.name))} to confirm.</span></div>` : ''}
       </div>
       <div class="cols"><div class="col">
@@ -977,7 +1154,14 @@
       <section class="section"><div class="section-head"><h2>Recent receipts</h2><a href="#/receipts">See all</a></div>
         <div class="list">${recent.map((x) => paymentRow(x, { self: true })).join('') || '<div class="empty">No payments yet.</div>'}</div>
       </section>
+      ${rec.total ? `<section class="section"><div class="section-head"><h2>Your rent record</h2></div>
+        <a class="card pad link-card" href="#/reference" style="color:inherit"><span class="at-icon">${icon('shield')}</span><div class="grow"><strong>Paid on time ${rec.onTime} of ${rec.total} ${plural(rec.word, rec.total)}</strong><div class="small muted">Share your rent reference with a landlord you want to rent from next.</div></div>${icon('chev', 'chev')}</a>
+      </section>` : ''}
       </div><div class="col">
+      <section class="section"><div class="section-head"><h2>Messages</h2>${thread.length > 3 ? `<button class="link-btn" data-action="conversation" data-id="${t.id}">See all</button>` : ''}</div>
+        <div class="card pad">${thread.length ? threadHTML(t.id, 'tenant', 3) : `<div class="small muted">Reply to a notice, or tell ${lf} when you'll pay. No need to call.</div>`}
+          <button class="btn block mt" data-action="writeLandlord">${icon('chat', 'sm')}Write to ${lf}</button></div>
+      </section>
       ${latest ? `<section class="section"><div class="section-head"><h2>Latest notice</h2><a href="#/notices">All notices</a></div>
         <button class="list row" data-action="viewNotice" data-id="${latest.id}" style="align-items:flex-start"><span class="tile">${icon('notice')}</span><div class="grow"><div class="title">${esc(latest.title)}</div><div class="notice-body">${esc(latest.body)}</div><div class="meta mt-s">${fmtDay(parse(latest.date))}</div></div></button>
       </section>` : ''}
@@ -991,6 +1175,7 @@
     const pid = unitOf(t).propertyId;
     return state.notices.filter((n) => n.audience === 'all' || n.audience === pid || n.audience === t.id || (Array.isArray(n.audience) && n.audience.includes(t.id))).sort((a, b) => (a.date < b.date ? 1 : -1));
   }
+  TN.reference = function () { return referenceView(myTenant(), 'home'); };
   TN.receipts = function () {
     const t = myTenant(), a = acct(t);
     return `${head('Receipts', { sub: `${a.payments.length} payments · ${money(a.paid)} in total` })}
@@ -2041,7 +2226,13 @@ We never sell your data or use it for adverts.</div>
     },
     viewNotice: (d) => {
       const n = byId(state.notices, d.id);
-      openSheet(`${sheetHead(n.title)}<div class="small muted" style="margin:-8px 0 14px">${fmtDate(parse(n.date))}${session.role === 'landlord' ? ' · ' + esc(audienceName(n.audience)) + ' · ' + n.channels.map(channelName).join(', ') : ' · from ' + esc(state.landlord.name)}</div><div class="prose">${esc(n.body)}</div>`);
+      const tenantSide = session.role === 'tenant';
+      const replies = messages().filter((m) => m.about === n.id && (!tenantSide || m.tenantId === session.id)).sort((a, b) => a.at - b.at);
+      const fromTenants = replies.filter((m) => m.from === 'tenant').length;
+      const repliesHTML = replies.length && session.role !== 'caretaker'
+        ? `<div class="section-head" style="margin-top:20px"><h2>${tenantSide ? 'Your replies' : `Replies (${fromTenants})`}</h2></div><div class="thread">${replies.map((m) => bubble(m, tenantSide ? 'tenant' : 'landlord', !tenantSide)).join('')}</div>`
+        : '';
+      openSheet(`${sheetHead(n.title)}<div class="small muted" style="margin:-8px 0 14px">${fmtDate(parse(n.date))}${session.role === 'landlord' ? ' · ' + esc(audienceName(n.audience)) + ' · ' + n.channels.map(channelName).join(', ') : ' · from ' + esc(state.landlord.name)}</div><div class="prose">${esc(n.body)}</div>${repliesHTML}${tenantSide ? `<button class="btn primary block mt" data-action="replyNotice" data-id="${n.id}">${icon('chat', 'sm')}Reply to ${esc(first(state.landlord.name))}</button>` : ''}`);
     },
     confirmPending: (d) => {
       const p = byId(state.payments, d.id);
@@ -2123,6 +2314,46 @@ We never sell your data or use it for adverts.</div>
     skipPin: () => finishLogin(),
     pay: () => paySheet(),
     manualPay: () => { const t = myTenant(), a = acct(t); manualPaySheet(a.balance > 0 ? a.balance : a.per); },
+    replyRent: () => messageSheet(session.id, 'rent'),
+    replyNotice: (d) => messageSheet(session.id, d.id),
+    writeLandlord: () => messageSheet(session.id, acct(myTenant()).balance > 0 ? 'rent' : null),
+    messageTenant: (d) => messageSheet(d.id, null),
+    conversation: (d) => {
+      const t = byId(state.tenants, d.id); if (!t) return;
+      const viewer = session.role === 'tenant' ? 'tenant' : 'landlord';
+      if (viewer === 'tenant' && t.id !== session.id) return;
+      let changed = false;
+      messages().forEach((m) => { if (m.tenantId === t.id && m.from !== viewer && !m.read) { m.read = true; changed = true; } });
+      if (changed) { save(); render(); }
+      openSheet(`${sheetHead(viewer === 'tenant' ? `Messages with ${esc(first(state.landlord.name))}` : `Messages with ${esc(first(t.name))}`)}${threadHTML(t.id, viewer)}
+        <button class="btn primary block mt" data-action="${viewer === 'tenant' ? 'writeLandlord' : 'messageTenant'}" data-id="${t.id}">${icon('chat', 'sm')}Write a message</button>`);
+    },
+    pickPromise: (d, el) => {
+      const form = el.closest('form'); if (!form) return;
+      const t = byId(state.tenants, form.tenant.value), when = parse(d.date);
+      form.promise.value = d.date;
+      if (form.promiseDate) form.promiseDate.value = d.date;
+      form.text.value = `I'll pay ${money(acct(t).balance)} on ${LH.fmtLong(when)}.`;
+      form.querySelectorAll('[data-action="pickPromise"]').forEach((c) => c.classList.toggle('active', c === el));
+    },
+    quickText: (d, el) => {
+      const form = el.closest('form'); if (!form) return;
+      if (form.promise.value && !/pay/i.test(d.text)) { form.promise.value = ''; if (form.promiseDate) form.promiseDate.value = ''; form.querySelectorAll('[data-action="pickPromise"]').forEach((c) => c.classList.remove('active')); }
+      form.text.value = d.text;
+      form.text.focus();
+      form.text.setSelectionRange(form.text.value.length, form.text.value.length);
+    },
+    messageWhatsApp: (d, el) => {
+      const form = el.closest('form');
+      const text = (form && form.text.value.trim()) || 'Hello, ';
+      window.open(LH.waLink(d.phone, text), '_blank', 'noopener');
+    },
+    shareReference: (d) => { const t = byId(state.tenants, d.id); if (t) window.open(LH.waLink('', referenceText(t)), '_blank', 'noopener'); },
+    copyReference: (d) => {
+      const t = byId(state.tenants, d.id); if (!t) return;
+      const text = referenceText(t);
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast('Rent reference copied'), () => toast("Couldn't copy. Use Share on WhatsApp instead."));
+    },
     newRequest: () => {
       openSheet(`${sheetHead('Report a repair')}
         <form data-form="newRequest">
@@ -2221,6 +2452,22 @@ We never sell your data or use it for adverts.</div>
       }
     },
     pin: () => finishLogin(),
+    sendMessage: (f) => {
+      if (session.role === 'caretaker') return;
+      const tenantSide = session.role === 'tenant';
+      const t = byId(state.tenants, f.get('tenant')); if (!t) return;
+      if (tenantSide && t.id !== session.id) return;
+      const text = String(f.get('text') || '').trim();
+      if (!text) return toast('Write a message first');
+      if (text.length > 500) return toast('Keep it under 500 characters');
+      let promise = String(f.get('promise') || '');
+      if (!tenantSide || !/^\d{4}-\d{2}-\d{2}$/.test(promise) || promise <= iso(T())) promise = null;
+      const about = f.get('about') || null;
+      messages().push({ id: LH.uid('m'), tenantId: t.id, propertyId: unitOf(t).propertyId, from: tenantSide ? 'tenant' : 'landlord', about, promise, text, date: iso(T()), at: Date.now(), read: false });
+      if (tenantSide) log(promise ? `${t.name} said they'll pay on ${fmtDay(parse(promise))}` : `${t.name} sent ${first(state.landlord.name)} a message`);
+      save(); closeSheet(); render();
+      toast(`Sent to ${tenantSide ? first(state.landlord.name) : first(t.name)}`);
+    },
     recordPayment: (f) => {
       const t = byId(state.tenants, f.get('tenant'));
       const amount = Math.round(Number(f.get('amount')) * 100) / 100;
@@ -2422,6 +2669,13 @@ We never sell your data or use it for adverts.</div>
 
   /* ---------- Live inputs ---------- */
   const inputs = {
+    promiseDate: (el) => {
+      const form = el.closest('form'); if (!form || !el.value) return;
+      const t = byId(state.tenants, form.tenant.value);
+      form.promise.value = el.value;
+      form.text.value = `I'll pay ${money(acct(t).balance)} on ${LH.fmtLong(parse(el.value))}.`;
+      form.querySelectorAll('[data-action="pickPromise"]').forEach((c) => c.classList.remove('active'));
+    },
     pickAll: (el) => { const form = el.closest('form'); form.querySelectorAll('input[name=to]').forEach((b) => { b.checked = el.checked; }); syncPicks(form); },
     pickOne: (el) => syncPicks(el.closest('form')),
     // Add property: show the fields for the kind chosen.

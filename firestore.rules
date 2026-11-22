@@ -7,7 +7,7 @@ rules_version = '2';
 //   landlords/{landlordId}                 landlordId = the landlord's sign-in account id (uid)
 //     members/{phone}                      +260… → { phone, role: tenant|caretaker, refId, propertyId?, unitId?, propertyIds? }
 //     properties/{id}  units/{id}  tenants/{id}  caretakers/{id}
-//     payments/{id}  notices/{id}  requests/{id}  activity/{id}  deductions/{id}
+//     payments/{id}  notices/{id}  requests/{id}  messages/{id}  activity/{id}  deductions/{id}
 //     private/settings                     reminders and other landlord-only settings
 //     counters/receipts                    { next } for receipt numbers
 //
@@ -32,6 +32,7 @@ service cloud.firestore {
 
     // ---------- Checks on what is written ----------
     function isAmount(v) { return v is number && v > 0 && v < 100000000; }
+    function isMessageText(v) { return v is string && v.size() > 0 && v.size() <= 500; }
     function noSecrets(d) { return !('nrc' in d) && !('tpin' in d) && !('passport' in d) && !('nrcVerified' in d); }
 
     // A tenant or caretaker finds the landlords they belong to by their own phone number.
@@ -104,8 +105,10 @@ service cloud.firestore {
       }
 
       match /notices/{nid} {
+        // A notice goes to 'all', one property, one tenant, or a list of tenants.
         allow read: if isLandlord(lid)
-          || (isTenant(lid) && resource.data.audience in ['all', member(lid).propertyId])
+          || (isTenant(lid) && (resource.data.audience in ['all', member(lid).propertyId, member(lid).refId]
+              || (resource.data.audience is list && member(lid).refId in resource.data.audience)))
           || (isCaretaker(lid) && (resource.data.audience == 'all' || resource.data.audience in member(lid).propertyIds));
         allow write: if isLandlord(lid);
       }
@@ -125,6 +128,27 @@ service cloud.firestore {
           || (caretakerHas(lid, resource.data.propertyId)
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy'])
               && request.resource.data.status in ['open', 'progress', 'done']);
+        allow delete: if isLandlord(lid);
+      }
+
+      // Messages between a tenant and their landlord: a reply to a notice, "I'll pay on Friday", etc.
+      match /messages/{mid} {
+        allow read: if isLandlord(lid)
+          || (isTenant(lid) && resource.data.tenantId == member(lid).refId);
+        allow create: if (isLandlord(lid)
+              && request.resource.data.from == 'landlord'
+              && isMessageText(request.resource.data.text))
+          || (isTenant(lid)
+              && request.resource.data.from == 'tenant'
+              && request.resource.data.tenantId == member(lid).refId
+              && request.resource.data.propertyId == member(lid).propertyId
+              && request.resource.data.read == false
+              && isMessageText(request.resource.data.text));
+        // The landlord can mark a tenant's message as read; a tenant can mark the landlord's as read.
+        // Nobody can change what was said.
+        allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+          && ((isLandlord(lid) && resource.data.from == 'tenant')
+              || (isTenant(lid) && resource.data.tenantId == member(lid).refId && resource.data.from == 'landlord'));
         allow delete: if isLandlord(lid);
       }
 

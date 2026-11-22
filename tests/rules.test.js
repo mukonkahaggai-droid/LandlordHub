@@ -56,6 +56,11 @@ beforeEach(async () => {
     await set(`${L}/notices/N3`, { title: 'Office closed Friday', audience: 'all' });
     await set(`${L}/requests/R1`, { tenantId: 'T2', propertyId: 'P1', text: 'Tap leaking', status: 'open' });
     await set(`${L}/requests/R11`, { tenantId: 'T11', propertyId: 'P3', text: 'Gate light', status: 'open' });
+    await set(`${L}/notices/N4`, { title: 'Late rent letter', audience: 'T1' });
+    await set(`${L}/notices/N5`, { title: 'Rent change', audience: ['T2', 'T11'] });
+    await set(`${L}/messages/M1`, { tenantId: 'T1', propertyId: 'P1', from: 'tenant', about: 'rent', promise: '2026-11-27', text: "I'll pay on Friday", read: false });
+    await set(`${L}/messages/M2`, { tenantId: 'T2', propertyId: 'P1', from: 'tenant', about: 'N1', text: 'Thanks', read: false });
+    await set(`${L}/messages/M3`, { tenantId: 'T1', propertyId: 'P1', from: 'landlord', about: null, text: 'Thank you, Chanda', read: false });
     await set(`${L}/activity/A1`, { text: 'Sent a notice', byPhone: PH.landlord });
     await set(`${L}/deductions/D1`, { amount: 400, reason: 'Repairs' });
     await set(`${L}/private/settings`, { reminders: { weekly: true } });
@@ -241,6 +246,45 @@ test("a caretaker can't add members or change tenants", async () => {
   await assertFails(db.doc(`${L}/members/${PH.stranger}`).set({ phone: PH.stranger, role: 'tenant', refId: 'T1', propertyId: 'P1', unitId: 'U1' }));
   await assertFails(db.doc(`${L}/tenants/T1`).update({ name: 'Changed' }));
   await assertFails(db.doc(`${L}/caretakers/C1`).update({ propertyIds: ['P1', 'P3'] }));
+});
+
+/* ---------- Messages ---------- */
+test('a tenant sees notices sent to them personally, not to other tenants', async () => {
+  const db = as.tenant1();
+  await assertSucceeds(db.doc(`${L}/notices/N4`).get());
+  await assertFails(db.doc(`${L}/notices/N5`).get());
+});
+
+test('a tenant can message their landlord and read only their own conversation', async () => {
+  const db = as.tenant1();
+  const ok = { tenantId: 'T1', propertyId: 'P1', from: 'tenant', about: 'rent', promise: '2026-11-27', text: "I'll pay K2,000 on Friday.", read: false };
+  await assertSucceeds(db.collection(`${L}/messages`).add(ok));
+  await assertFails(db.collection(`${L}/messages`).add({ ...ok, tenantId: 'T2' }));
+  await assertFails(db.collection(`${L}/messages`).add({ ...ok, from: 'landlord' }));
+  await assertFails(db.collection(`${L}/messages`).add({ ...ok, text: '' }));
+  await assertFails(db.collection(`${L}/messages`).add({ ...ok, text: 'x'.repeat(501) }));
+  await assertSucceeds(db.collection(`${L}/messages`).where('tenantId', '==', 'T1').get());
+  await assertFails(db.doc(`${L}/messages/M2`).get());
+  await assertFails(db.collection(`${L}/messages`).get());
+});
+
+test("nobody can change what was said; each side can only mark the other's message as read", async () => {
+  await assertSucceeds(as.tenant1().doc(`${L}/messages/M3`).update({ read: true }));
+  await assertFails(as.tenant1().doc(`${L}/messages/M3`).update({ text: 'Changed' }));
+  await assertFails(as.tenant1().doc(`${L}/messages/M1`).update({ promise: '2026-12-31' }));
+  await assertFails(as.tenant1().doc(`${L}/messages/M1`).delete());
+  await assertSucceeds(as.landlord().doc(`${L}/messages/M1`).update({ read: true }));
+  await assertFails(as.landlord().doc(`${L}/messages/M1`).update({ text: 'Changed' }));
+});
+
+test("a landlord can read and answer every tenant; caretakers and strangers can't see messages", async () => {
+  const db = as.landlord();
+  await assertSucceeds(db.collection(`${L}/messages`).get());
+  await assertSucceeds(db.collection(`${L}/messages`).add({ tenantId: 'T2', propertyId: 'P1', from: 'landlord', about: 'N1', text: 'Yes, by 15:00.', read: false }));
+  await assertFails(db.collection(`${L}/messages`).add({ tenantId: 'T2', propertyId: 'P1', from: 'tenant', text: 'Pretending to be Natasha', read: false }));
+  await assertFails(as.caretaker().collection(`${L}/messages`).where('propertyId', '==', 'P1').get());
+  await assertFails(as.stranger().doc(`${L}/messages/M1`).get());
+  await assertFails(as.otherLandlord().collection(`${L}/messages`).get());
 });
 
 /* ---------- Everything else ---------- */
