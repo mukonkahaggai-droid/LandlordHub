@@ -1977,6 +1977,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   function addPropertySheet() {
     openSheet(`${sheetHead('Add a property')}
       <form data-form="addProperty" autocomplete="off">
+        <div id="add-fields">
         <div class="field"><span class="label">What kind of property?</span><div class="seg">
           <label><input type="radio" name="kind" value="flats" checked data-input="propKind"><span>Flats or houses</span></label>
           <label><input type="radio" name="kind" value="boarding" data-input="propKind"><span>Boarding house (bed spaces)</span></label>
@@ -2002,7 +2003,10 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
           </div>
           <div class="help" style="margin:-6px 0 14px">Terms start in January, May and September. You can change the rent of any single bed space later.</div>
         </div>
-        <button class="btn primary block lg" type="submit">Add property</button>
+        </div>
+        <div id="add-review" class="add-review" hidden></div>
+        <button class="btn primary block lg" type="submit" id="add-submit">Check and add</button>
+        <button class="btn ghost block mt-s" type="button" data-action="addPropBack" id="add-back" hidden>Go back and change</button>
       </form>`);
   }
   // One row per house: its name and how many bed spaces it has.
@@ -2323,6 +2327,14 @@ We never sell your data or use it for adverts.</div>
     remind: (d) => remindSheet([d.id]),
     remindAll: () => remindSheet(activeTenants().filter((t) => { const a = acct(t); return a.status === 'overdue' || (a.status === 'partial' && a.daysLate > 0); }).map((t) => t.id)),
     tenantFilter: (d) => { ui.tenantFilter = d.f; render(); },
+    addPropBack: (d, el) => {
+      const form = el.closest('form'); if (!form) return;
+      delete form.dataset.step;
+      form.querySelector('#add-fields').hidden = false;
+      form.querySelector('#add-review').hidden = true;
+      form.querySelector('#add-submit').textContent = 'Check and add';
+      el.hidden = true;
+    },
     editProperty: (d) => editPropertySheet(d.id),
     editRents: (d) => editRentsSheet(d.id),
     rentNotice: (d) => newNoticeSheet({ tpl: 'increase', audience: d.ids.split(','), fills: { '[date]': fmtDate(parse(d.from)), '[current rent]': d.old ? money(Number(d.old)) : '', '[new rent]': d.new ? money(Number(d.new)) : '' } }),
@@ -2739,8 +2751,24 @@ We never sell your data or use it for adverts.</div>
       log(`Recorded a ${money(amount)} deduction (${x.reason})`);
       save(); closeSheet(); go('collections/' + x.date.slice(0, 4)); render(); toast(`${money(amount)} deduction saved`);
     },
-    addProperty: (f) => {
+    /* Adding a property takes two taps: "Check and add" shows what will be created, and only
+       "Yes, add it" creates it. A slip of the finger (or the keyboard's Go key) never adds one. */
+    addProperty: (f, form) => {
       const p = { id: LH.uid('P'), name: f.get('name').trim(), area: f.get('area').trim(), kind: ['flats', 'boarding', 'shops'].includes(f.get('kind')) ? f.get('kind') : 'flats' };
+      if (!p.name) return toast('Give the property a name');
+      if (!p.area) return toast('Enter the area and town');
+      const review = (summary) => {
+        if (form.dataset.step === 'review') return true; // second tap: go ahead
+        form.dataset.step = 'review';
+        form.querySelector('#add-fields').hidden = true;
+        const box = form.querySelector('#add-review');
+        box.innerHTML = `<div class="r-cap">Check before adding</div><div class="add-review-name">${esc(p.name)}</div><div class="small muted">${esc(p.area)}</div><div class="add-review-sum">${summary}</div>`;
+        box.hidden = false;
+        form.querySelector('#add-submit').textContent = 'Yes, add it';
+        form.querySelector('#add-back').hidden = false;
+        sheetRoot.querySelector('.sheet').scrollTop = 0;
+        return false;
+      };
       if (p.kind === 'boarding') {
         // Houses, each with its own bed spaces: "House 1 · Bed 1", "House 1 · Bed 2" …
         const names = f.getAll('houseName').map((s) => s.trim()), beds = f.getAll('houseBeds').map((b) => Math.round(Number(b)));
@@ -2748,6 +2776,8 @@ We never sell your data or use it for adverts.</div>
         if (!names.length || names.some((s) => !s)) return toast('Give each house a name');
         if (beds.some((b) => !(b >= 1 && b <= 40))) return toast('Each house needs 1 to 40 bed spaces');
         if (!(rent > 0)) return toast('Enter the rent per bed space');
+        const totalBeds = beds.reduce((s, b) => s + b, 0), svc = Number(f.get('bedService')) || 0;
+        if (!review(`Boarding house · ${names.length} house${names.length === 1 ? '' : 's'}, <strong>${totalBeds} bed spaces</strong><br>${money(rent)} per bed, per term${svc ? ` + ${money(svc)} service charge` : ''}`)) return;
         state.properties.push(p);
         names.forEach((h, i) => { for (let b = 1; b <= beds[i]; b++) state.units.push({ id: LH.uid('U'), propertyId: p.id, house: h, label: `${h} · Bed ${b}`, rent, service: Number(f.get('bedService')) || 0, serviceName: 'Service charge', period: 'term' }); });
         const total = beds.reduce((s, b) => s + b, 0);
@@ -2755,10 +2785,14 @@ We never sell your data or use it for adverts.</div>
         save(); closeSheet(); go('property/' + p.id); toast(`${p.name} added with ${total} bed spaces`);
         return;
       }
-      const n = Math.min(60, Math.max(1, Number(f.get('count')) || 1)), rent = Number(f.get('rent'));
-      if (!(rent > 0)) return toast('Enter the rent for each one');
-      state.properties.push(p);
+      const n = Math.round(Number(f.get('count'))), rent = Number(f.get('rent'));
       const word = p.kind === 'shops' ? 'Shop' : 'House';
+      if (!(n >= 1 && n <= 60)) return toast(`Enter how many ${p.kind === 'shops' ? 'shops' : 'flats or houses'}, from 1 to 60`);
+      if (!(rent > 0)) return toast('Enter the rent for each one');
+      const svc = Number(f.get('service')) || 0;
+      const what = p.kind === 'shops' ? (n === 1 ? 'shop' : 'shops') : n === 1 ? 'flat or house' : 'flats or houses';
+      if (!review(`<strong>${n} ${what}</strong> (${word} 1${n > 1 ? ` to ${word} ${n}` : ''})<br>${money(rent)} a month each${svc ? ` + ${money(svc)} service charge` : ''}<div class="small muted mt-s">You can rename them and change any rent afterwards.</div>`)) return;
+      state.properties.push(p);
       for (let i = 1; i <= n; i++) {
         state.units.push({ id: LH.uid('U'), propertyId: p.id, label: `${word} ${i}`, rent, service: Number(f.get('service')) || 0, serviceName: 'Service charge', period: 'month' });
       }
@@ -2992,6 +3026,26 @@ We never sell your data or use it for adverts.</div>
     if (!fn) return;
     if (el.type !== 'checkbox' && el.type !== 'radio' && !(el.tagName === 'A' && el.getAttribute('href') && el.getAttribute('href') !== '#')) e.preventDefault();
     fn(el.dataset, el, e);
+  });
+  // In forms with several questions, the keyboard's Enter / Go key moves to the next box (and
+  // closes the keyboard on the last one) instead of sending the form half filled in.
+  const typeable = (el) => el.matches('input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]), select');
+  const nextBoxes = (form) => [...form.elements].filter((el) => typeable(el) && !el.disabled && el.offsetParent !== null);
+  document.addEventListener('focusin', (e) => {
+    const el = e.target, form = el.closest && el.closest('form[data-form]');
+    if (!form || !typeable(el)) return;
+    const boxes = nextBoxes(form);
+    if (boxes.length > 1) el.setAttribute('enterkeyhint', boxes.indexOf(el) === boxes.length - 1 ? 'done' : 'next');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    const el = e.target, form = el.closest && el.closest('form[data-form]');
+    if (!form || !typeable(el) || el.tagName === 'SELECT') return;
+    const boxes = nextBoxes(form);
+    if (boxes.length < 2) return; // one-box forms (phone number, code) still send on Enter
+    e.preventDefault();
+    const next = boxes[boxes.indexOf(el) + 1];
+    if (next) next.focus(); else el.blur();
   });
   document.addEventListener('submit', (e) => {
     const f = e.target.closest('form[data-form]');
