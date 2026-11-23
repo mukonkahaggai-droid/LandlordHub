@@ -49,6 +49,12 @@ save(square(180, 0.92), 'icons', 'apple-touch-icon.png')
 # "Maskable": phones may crop to a circle, so the logo stays inside the middle 80%.
 save(square(512, 0.74), 'icons', 'icon-maskable-512.png')
 
+# ---- Windows desktop shortcut (icons/landlord-hub.ico, every size Windows asks for) ----
+ico = square(256, 0.92)
+ico_path = os.path.join(ROOT, 'icons', 'landlord-hub.ico')
+ico.save(ico_path, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+print('wrote', os.path.relpath(ico_path, ROOT))
+
 # ---- Android app ----
 RES = ('android', 'app', 'src', 'main', 'res')
 DENSITIES = {'mdpi': 1, 'hdpi': 1.5, 'xhdpi': 2, 'xxhdpi': 3, 'xxxhdpi': 4}
