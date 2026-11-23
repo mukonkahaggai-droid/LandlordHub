@@ -23,7 +23,9 @@ final class SmsStore {
     // Money coming in, with an amount like "ZMW 2,000.00" or "K3000".
     private static final Pattern RECEIVED = Pattern.compile("(?i)(receiv|credited|deposit)");
     private static final Pattern AMOUNT = Pattern.compile("(?i)(ZMW|ZK|K)\\s?([0-9][0-9,]*(\\.[0-9]{1,2})?)");
-    private static final Pattern SENT = Pattern.compile("(?i)\\b(you have sent|sent to|you paid|payment to|withdraw|airtime|bundle)\\b");
+    // Also the "NFS SETTLEMENT ACCOUNT" message of an MTN → Airtel transfer, so it isn't counted twice.
+    // The full checklist for each network is LH.readPaymentPopup in core.js.
+    private static final Pattern SENT = Pattern.compile("(?i)\\b(you have sent|sent to|you paid|payment to|withdraw|airtime|bundle|settlement)\\b");
 
     // Who real "money received" SMS come from. They use a name (e.g. "MoMo", "AirtelMoney", "Zamtel"),
     // never a phone number, so a text typed on someone's phone is never trusted.

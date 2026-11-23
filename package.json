@@ -9,6 +9,7 @@
     "android:sync": "node scripts/build-www.js && npx cap sync android",
     "android:open": "npx cap open android",
     "vendor:firebase": "node scripts/vendor-firebase.js",
+    "test:sms": "node tests/sms.test.js",
     "test:rules": "firebase emulators:exec --only firestore --project demo-landlord-hub \"node --test tests/rules.test.js\""
   },
   "dependencies": {

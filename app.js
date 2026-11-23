@@ -1462,11 +1462,17 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     let changed = false;
     found.forEach((m) => {
       if (alreadyRecorded(m)) return;
-      const t = !m.unverified && tenantByLine(m.phone);
+      // A number in the message must be one of a tenant's saved lines. With no number (money sent from
+      // another network), the full name must match exactly one tenant.
+      let t = null;
+      if (!m.unverified) {
+        if (m.phone) t = tenantByLine(m.phone);
+        else if (m.name) { const hits = activeTenants().filter((x) => LH.sameName(x.name, m.name)); t = hits.length === 1 ? hits[0] : null; }
+      }
       const wallet = LH.wallet(m.net || LH.network(state.landlord.phone));
       if (t) {
         addPayment({ tenantId: t.id, amount: m.amount, date: m.date && m.date <= iso(T()) ? m.date : iso(T()), method: wallet, ref: m.ref || '', by: 'landlord', byName: 'Automatic (' + wallet + ')', status: 'confirmed', smsKey: smsKey(m), fromSms: true });
-        state.activity.push({ id: LH.uid('a'), date: iso(T()), who: 'Landlord Hub', text: `Recorded ${money(m.amount)} from ${t.name} (${LH.prettyPhone(m.phone)}) from a ${wallet} message`, at: Date.now() });
+        state.activity.push({ id: LH.uid('a'), date: iso(T()), who: 'Landlord Hub', text: `Recorded ${money(m.amount)} from ${t.name} (${m.phone ? LH.prettyPhone(m.phone) : 'matched by name'}) from a ${wallet} message`, at: Date.now() });
       } else {
         state.smsWaiting = state.smsWaiting || [];
         if (state.smsWaiting.some((w) => smsKey(w) === smsKey(m))) return;
@@ -1502,11 +1508,10 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       msgs.forEach((x) => {
         if (x.date && x.date < since) return; // from before it was switched on
         const unverified = !trustedSender(x.from);
-        LH.parseMoneySms(x.body).forEach((m) => {
+        // From the network itself: it must pass that network's checklist (LH.readPaymentPopup in core.js).
+        (unverified ? LH.parseMoneySms(x.body) : LH.readPaymentPopup(x.from, x.body)).forEach((m) => {
           if (!m.date && x.date) m.date = iso(new Date(Number(x.date)));
           if (unverified) m.unverified = true;
-          // The sender's name says which wallet it came to when the message itself doesn't.
-          else if (!m.net) m.net = /airtel/i.test(x.from) ? 'Airtel' : /zamtel|kwacha/i.test(x.from) ? 'Zamtel' : 'MTN';
           if (!found.some((f) => smsKey(f) === smsKey(m))) found.push(m);
         });
       });
@@ -1536,12 +1541,12 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       <div class="card pad link-card ${on ? 'ok' : ''}"><span class="at-icon">${icon(on ? 'check' : 'sms')}</span><div class="grow">
         <strong>${on ? 'On: payments are recorded by themselves' : lost ? 'Off: notification access was turned off' : 'Record payments automatically'}</strong>
         <div class="small muted">${on
-          ? "When a MoMo, Airtel or Zamtel pop-up says money came in from a number saved for a tenant, it is taken off what that tenant owes. Nothing pops up; you see it on the tenant's page."
-          : "Landlord Hub does not read your messages. It only looks at the pop-ups from MTN MoMo, Airtel Money and Zamtel. When the number that sent money is one of a tenant's saved lines, the payment is taken off their rent by itself."}</div>
+          ? "When a MoMo, Airtel or Zamtel pop-up says money came in from a number saved for a tenant (or, when there's no number, from a name that matches exactly one tenant), it is taken off what that tenant owes. Nothing pops up; you see it on the tenant's page."
+          : "Landlord Hub does not read your messages. It only looks at the pop-ups from MTN MoMo, Airtel Money and Zamtel. When the number that sent money is one of a tenant's saved lines, or the name matches exactly one tenant when there's no number, the payment is taken off their rent by itself."}</div>
         ${on ? '' : '<div class="small muted mt-s">Tap Turn on, switch on <strong>Landlord Hub</strong> under <strong>Notification access</strong>, then come back.</div>'}
         <button class="btn ${on ? '' : 'primary'} sm mt-s" data-action="${on ? 'smsAutoOff' : 'smsAutoEnable'}">${on ? 'Turn off' : 'Turn on'}</button>
       </div></div>
-      ${waiting.length ? `<div class="card pad mt-s"><strong>${waiting.length} payment${waiting.length === 1 ? '' : 's'} from ${waiting.length === 1 ? 'a number' : 'numbers'} not saved for a tenant</strong><div class="small muted">${money(waiting.reduce((x, m) => x + m.amount, 0))} in total. ${waiting.length === 1 ? 'It was' : 'These were'} not taken off anyone's rent.</div>
+      ${waiting.length ? `<div class="card pad mt-s"><strong>${waiting.length} payment${waiting.length === 1 ? '' : 's'} not matched to a tenant</strong><div class="small muted">${money(waiting.reduce((x, m) => x + m.amount, 0))} in total. ${waiting.length === 1 ? 'It was' : 'These were'} not taken off anyone's rent.</div>
         <div class="btn-row mt-s"><button class="btn primary sm" data-action="smsReviewWaiting">Choose who paid</button><button class="btn sm" data-action="smsClearWaiting">Clear</button></div></div>` : ''}
     </section>`;
   }

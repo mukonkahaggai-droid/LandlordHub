@@ -344,11 +344,16 @@
         amount = Number(m[1].replace(/,/g, '')); break;
       }
       if (!(amount > 0)) continue;
-      const ph = s.match(/(?:\+?260|\b0)(9[5-7]|7[5-7]|57)\d{7}\b/);
+      // The sender's number: looked for first in the "from …" part (before the transaction ID or balance),
+      // where networks write it as 0966…, 260966…, +260 96 612 3456 or just 966123456.
+      const FULL = /(?:\+?260|\b0)[\s-]?(?:9[5-7]|7[5-7]|57)(?:[\s-]?\d){7}(?!\d)/;
+      const BARE = /\b(?:9[5-7]|7[5-7]|57)\d{7}\b/;
+      const fromPart = (s.match(/\bfrom\b(.*?)(?=\b(?:Txn|Trans|Transaction|Financial|TID|Ref|Reference|Bal|Balance|New balance|Your)\b|$)/i) || [])[1] || '';
+      const ph = fromPart.match(FULL) || fromPart.match(BARE) || s.match(FULL);
       const phone = ph ? LH.cleanPhone(ph[0]) : null;
       const nm = s.match(/from\s+(?:[+0-9 ()]{9,}\s*)?([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){0,3})/);
       const name = nm ? nm[1].replace(/(\s+(On|At|Ref|Txn|Transaction|Your|New|Amount|ZMW))+$/i, '').trim() : null;
-      const id = s.match(/(?:Transaction\s*ID|Trans\.?\s*ID|Txn\s*ID|TID|Financial Transaction Id|Ref(?:erence)?)[:.\s#]*([A-Z0-9][A-Z0-9.\-]{4,})/i);
+      const id = s.match(/(?:Transaction\s*ID|Trans\.?\s*ID|Txn\.?\s*ID|TID|Financial Transaction Id|Ref(?:erence)?)[:.\s#]*([A-Z0-9][A-Z0-9.\-]{4,})/i);
       const dt = s.match(/(\d{4})-(\d{2})-(\d{2})|(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})/);
       let date = null;
       if (dt) {
@@ -360,6 +365,42 @@
       out.push({ raw, amount, phone, name, ref: id ? id[1].replace(/\.$/, '') : null, date, net });
     }
     return out;
+  };
+
+  /* ---------- Checklist for pop-ups from the networks (Android app) ----------
+     A pop-up is only read as a payment when it passes every check for the network that sent it:
+     - Sender: named Airtel Money (any spelling or capitals), MoMo / MTN, or Zamtel. Never a phone number.
+     - Airtel Money: the message starts "You have received". This covers Airtel → Airtel ("… from 770328917
+       MWANSA SINKALA …", matched by the number) and MTN → Airtel ("… from Ireen Mooka. Txn. ID …", matched
+       by the name). The second message of an MTN → Airtel transfer ("Money received … from 0245971 NFS
+       SETTLEMENT ACCOUNT …") is ignored, so the money is counted once.
+     - MTN MoMo: the message starts "Y'ello" (or Yello / Yellow), then "You have received".
+     - Zamtel: a "received" message with an amount.
+     - Settlement accounts and anything about money sent, airtime, bundles or balances are ignored.
+     The wallet recorded is the network that sent the pop-up. */
+  LH.senderNet = function (from) {
+    const f = String(from || '');
+    if (!/[a-z]/i.test(f)) return null; // a phone number can be anyone
+    if (/airtel/i.test(f)) return 'Airtel';
+    if (/zamtel|kwacha/i.test(f)) return 'Zamtel';
+    if (/momo|mtn/i.test(f)) return 'MTN';
+    return null;
+  };
+  LH.readPaymentPopup = function (from, body) {
+    const net = LH.senderNet(from);
+    const s = String(body || '').replace(/\s+/g, ' ').trim();
+    if (!net || !s) return [];
+    if (/settlement/i.test(s)) return [];
+    if (net === 'Airtel' && !/^you have received\b/i.test(s)) return [];
+    if (net === 'MTN' && !/^y\s?['’`]?\s?ello(w)?\b[\s.,!:;-]*you have received\b/i.test(s)) return [];
+    // One pop-up is one payment: drop the "Y'ello." greeting so the parser sees one message.
+    const r = LH.parseMoneySms(s.replace(/^y\s?['’`]?\s?ello(w)?\b[\s.,!:;-]*/i, ''));
+    return r.slice(0, 1).map((m) => Object.assign(m, { net }));
+  };
+  // A name in a message matches a tenant when it is the same words (any order, any capitals).
+  LH.sameName = function (a, b) {
+    const w = (x) => String(x || '').toLowerCase().replace(/[^a-z' -]/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
+    return !!w(a) && w(a) === w(b);
   };
 
   /* ---------- Messages ----------
