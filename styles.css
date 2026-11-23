@@ -897,3 +897,26 @@ body { letter-spacing: -0.005em; font-feature-settings: "tnum" 1; }
 .sync-status.ok::before { background: var(--paid); }
 .sync-status.warn { color: var(--overdue); }
 .sync-status.warn::before { background: var(--overdue); }
+
+/* ---------- Add a property: different rents ---------- */
+.same-rent { margin: 2px 0 14px; align-items: flex-start; }
+.unit-rent-list { display: grid; gap: 8px; }
+.unit-rent-row { display: flex; align-items: center; gap: 8px; }
+.unit-rent-row .grow { flex: 1; min-width: 0; }
+.unit-rent { width: 120px; flex-shrink: 0; }
+.house-rent-name { font-weight: 600; font-size: calc(14.5px * var(--ts)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Anything marked hidden stays hidden, even buttons and fields whose own style sets a display. */
+[hidden] { display: none !important; }
+
+/* ---------- Rooms ---------- */
+.room-head { display: flex; gap: 8px; font-size: calc(12px * var(--ts)); color: var(--muted); font-weight: 600; padding: 0 2px 6px 30px; }
+.room-head span:first-child { flex: 1; }
+.room-head span:nth-child(2) { width: 64px; }
+.room-head .room-rent-col { width: 110px; }
+.room-row { display: flex; align-items: center; gap: 8px; }
+.room-row .grow { flex: 1; min-width: 0; }
+.room-spaces { width: 64px; flex-shrink: 0; }
+.room-row .room-rent-col { width: 110px; flex-shrink: 0; }
+.section.room { margin-top: 14px; }
+.section.room .section-head { margin-bottom: 6px; }

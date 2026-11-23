@@ -332,6 +332,37 @@ test('the landlord publishes who may sign in; nobody else can', async () => {
   await assertFails(as.otherLandlord().doc(`${L}/members/+260960000474`).set({ phone: '+260960000474', role: 'tenant', refId: 'T1', propertyId: 'P1', unitId: 'U1' }));
 });
 
+/* ---------- Rooms and tenancies ---------- */
+test('tenancies: a tenant sees only their own, a caretaker those at their properties', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.doc(`${L}/rooms/rm1`).set({ id: 'rm1', propertyId: 'P1', name: 'Flat 1' });
+    await db.doc(`${L}/rooms/rm13`).set({ id: 'rm13', propertyId: 'P3', name: 'Main house' });
+    await db.doc(`${L}/tenancies/tn1`).set({ id: 'tn1', tenantId: 'T1', propertyId: 'P1', unitId: 'U1', moveIn: '2025-01-01', moveOut: null });
+    await db.doc(`${L}/tenancies/tn1old`).set({ id: 'tn1old', tenantId: 'T1', propertyId: 'P3', unitId: 'U13', moveIn: '2024-01-01', moveOut: '2024-12-31' });
+    await db.doc(`${L}/tenancies/tn2`).set({ id: 'tn2', tenantId: 'T2', propertyId: 'P1', unitId: 'U2', moveIn: '2025-01-01', moveOut: null });
+    await db.doc(`${L}/tenancies/tn11`).set({ id: 'tn11', tenantId: 'T11', propertyId: 'P3', unitId: 'U13', moveIn: '2025-01-01', moveOut: null });
+  });
+  const t = as.tenant1().doc(L), c = as.caretaker().doc(L);
+  // Tenant: all their own tenancies (including the old one elsewhere), nobody else's, no rooms.
+  const mine = await assertSucceeds(t.collection('tenancies').where('tenantId', '==', 'T1').get());
+  if (mine.size !== 2) throw new Error('expected 2 tenancies, got ' + mine.size);
+  await assertFails(t.collection('tenancies').doc('tn2').get());
+  await assertFails(t.collection('tenancies').get());
+  await assertFails(t.collection('rooms').doc('rm1').get());
+  // Caretaker: rooms and tenancies at P1 only.
+  await assertSucceeds(c.collection('rooms').where('propertyId', '==', 'P1').get());
+  await assertSucceeds(c.collection('tenancies').where('propertyId', '==', 'P1').get());
+  await assertFails(c.collection('rooms').where('propertyId', '==', 'P3').get());
+  await assertFails(c.collection('tenancies').doc('tn11').get());
+  // Only the landlord writes them, never with ID numbers.
+  await assertSucceeds(as.landlord().doc(`${L}/tenancies/tn9`).set({ id: 'tn9', tenantId: 'T2', propertyId: 'P1', unitId: 'U2', moveIn: '2026-12-01', moveOut: null }));
+  await assertFails(as.landlord().doc(`${L}/tenancies/tn9`).set({ id: 'tn9', tenantId: 'T2', nrc: '123456/78/1' }));
+  await assertFails(t.collection('tenancies').doc('tn1').update({ moveOut: '2026-01-01' }));
+  await assertFails(c.collection('rooms').doc('rm1').update({ name: 'Renamed' }));
+  await assertFails(as.stranger().doc(`${L}/tenancies/tn1`).get());
+});
+
 /* ---------- Everything else ---------- */
 test('collections that are not in the rules are closed', async () => {
   await assertFails(as.landlord().doc('anything/else').set({ x: 1 }));

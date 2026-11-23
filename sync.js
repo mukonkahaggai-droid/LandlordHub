@@ -29,7 +29,7 @@
   try { db.enablePersistence({ synchronizeTabs: true }).catch(function () {}); } catch (e) {}
 
   // The record lists that sync, one Firestore collection each, under landlords/{uid}/…
-  var COLS = ['properties', 'units', 'tenants', 'caretakers', 'payments', 'notices', 'requests', 'messages', 'activity', 'deductions'];
+  var COLS = ['properties', 'rooms', 'units', 'tenants', 'tenancies', 'caretakers', 'payments', 'notices', 'requests', 'messages', 'activity', 'deductions'];
   // Landlord-only settings kept together in landlords/{uid}/private/settings.
   var SETTINGS = ['reminders', 'remindedAt', 'receiptSeq', 'smsWaiting', 'version'];
   var BATCH = 400; // Firestore allows 500 writes per batch
@@ -57,7 +57,10 @@
     (st.units || []).forEach(function (u) { unitProp[u.id] = u.propertyId; });
     var tenantProp = {};
     (st.tenants || []).forEach(function (t) { var p = unitProp[t.unitId] || ''; if (t.propertyId !== p) t.propertyId = p; tenantProp[t.id] = p; });
-    (st.payments || []).forEach(function (p) { var q = tenantProp[p.tenantId] || ''; if (p.propertyId !== q) p.propertyId = q; });
+    // A payment belongs to the property of the tenancy it was paid for (a tenant may have moved since).
+    var tnProp = {};
+    (st.tenancies || []).forEach(function (tn) { tnProp[tn.id] = tn.propertyId; });
+    (st.payments || []).forEach(function (p) { var q = (p.tenancyId && tnProp[p.tenancyId]) || tenantProp[p.tenantId] || ''; if (p.propertyId !== q) p.propertyId = q; });
     (st.requests || []).forEach(function (r) { var q = tenantProp[r.tenantId] || ''; if (r.propertyId !== q) r.propertyId = q; });
     COLS.forEach(function (c) {
       var list = st[c] || [], max = 0;
@@ -77,7 +80,7 @@
     (st.tenants || []).forEach(function (t) {
       var ph = intl(t.phone);
       if (t.ended || ph.length !== 13 || out[ph]) return;
-      out[ph] = { phone: ph, role: 'tenant', refId: t.id, propertyId: unitProp[t.unitId] || '', unitId: t.unitId };
+      out[ph] = { phone: ph, role: 'tenant', refId: t.id, propertyId: unitProp[t.unitId] || '', unitId: t.unitId, tenancyId: t.tenancyId || '' };
     });
     (st.caretakers || []).forEach(function (c) {
       var ph = intl(c.phone);
@@ -296,7 +299,7 @@
       q.push(['tenants', b.collection('tenants').doc(m.refId)]);
       q.push(['units', b.collection('units').doc(m.unitId)]);
       q.push(['properties', b.collection('properties').doc(m.propertyId)]);
-      ['payments', 'requests', 'messages'].forEach(function (c) { q.push([c, b.collection(c).where('tenantId', '==', m.refId)]); });
+      ['payments', 'requests', 'messages', 'tenancies'].forEach(function (c) { q.push([c, b.collection(c).where('tenantId', '==', m.refId)]); });
       ['all', m.propertyId, m.refId].forEach(function (a) { q.push(['notices', N.where('audience', '==', a)]); });
       q.push(['notices', N.where('audience', 'array-contains', m.refId)]);
     } else {
@@ -304,7 +307,7 @@
       q.push(['notices', N.where('audience', '==', 'all')]);
       (m.propertyIds || []).forEach(function (pid) {
         q.push(['properties', b.collection('properties').doc(pid)]);
-        ['units', 'tenants', 'payments', 'requests'].forEach(function (c) { q.push([c, b.collection(c).where('propertyId', '==', pid)]); });
+        ['rooms', 'units', 'tenants', 'tenancies', 'payments', 'requests'].forEach(function (c) { q.push([c, b.collection(c).where('propertyId', '==', pid)]); });
         q.push(['notices', N.where('audience', '==', pid)]);
       });
     }

@@ -19,12 +19,19 @@ That is also how the rules know whose records they are.
 ```
 landlords/{landlordUid}                 name, phone (+260…), business, email, payout
   members/{+260phone}                   who else may sign in to these records
-  properties/{id}                       name, area, kind
-  units/{id}                            propertyId, label, rent, service, serviceName, period,
-                                        rates: [{ from, rent, service }] (rent changes and the day each starts)
-  tenants/{id}                          name, phone, unitId, propertyId, since, dueDay, every, deposit, lang, lines
+  properties/{id}                       name, area, kind (flats | boarding | shops | house)
+  rooms/{id}                            propertyId, name
+  units/{id}                            a space in a room: propertyId, roomId, spaceNo, label, rent, service,
+                                        serviceName, period, rates: [{ from, rent, service }] (rent changes and when)
+  tenants/{id}                          the person: name, phone, lines, lang — plus a copy of their current
+                                        tenancy (tenancyId, unitId, propertyId, since, dueDay, every, deposit, ended)
+  tenancies/{id}                        one person in one space: tenantId, name, phone, propertyId, roomId, unitId,
+                                        spaceNo, moveIn, moveOut (null while they live there), chargeFrom/chargeTo
+                                        (which rent periods it pays for, when they differ), dueDay, every, deposit,
+                                        space (a copy of the space's name and rent, so history survives deletions)
   caretakers/{id}                       name, phone, propertyIds
-  payments/{id}                         tenantId, propertyId, amount, date, method, ref, status, by, byName, receipt, smsKey
+  payments/{id}                         tenantId, tenancyId, propertyId (of that tenancy), amount, date, method, ref,
+                                        status, by, byName, receipt, smsKey
   notices/{id}                          title, body, audience ('all' or a propertyId), channels, date
   requests/{id}                         tenantId, propertyId, category, text, status (open | progress | done), date
   messages/{id}                         tenantId, propertyId, from (tenant | landlord), about ('rent', a notice id or null),
@@ -36,6 +43,22 @@ landlords/{landlordUid}                 name, phone (+260…), business, email, 
 ```
 
 Ids are the same ones the app already uses (`P1`, `T1`, `pay…`), so moving records online keeps every link.
+
+### Properties, rooms, spaces and tenancies
+
+- A property has **rooms**; a room has one or more **spaces** (`units`). A flat or shop is a room with one
+  space; a boarding room has a space per bed. Adding a property asks for its name, location and type, then
+  how many rooms and how many people each takes.
+- A **tenancy** is one person in one space for a stretch of time. Rent is charged per tenancy, at that
+  space's rent at the time, and every payment is tied to the tenancy it was paid during.
+- **Moving** ends the old tenancy and starts a new one; the new space is theirs straight away and its rent
+  starts at the next rent period, so nothing is charged twice and past months keep their old rent.
+- **Leaving** ends the tenancy (the month they leave is charged, as before). **Coming back** is a new tenancy
+  on the same person, starting at the first period not already charged; all their history stays with them.
+- A person's balance is worked out across all their tenancies, oldest first, so arrears from an old room
+  aren't lost when they move.
+- Older saved records are moved over automatically (`LH.migrate` in `core.js`): every tenant gets one
+  tenancy, payments get its id, boarding houses' houses become rooms, and each flat or shop becomes a room.
 
 ### Fields the app must add when saving (they are not in the device records today)
 
@@ -59,6 +82,8 @@ As a backstop, the rules refuse any record that contains `nrc`, `nrcVerified`, `
 |---|---|---|---|
 | Landlord profile | read, change | read | read |
 | Properties, units | everything | read their assigned properties | read their own home |
+| Rooms | everything | read at their properties | nothing |
+| Tenancies | everything | read at their properties | read all of their own (including past ones) |
 | Tenants | everything | read tenants in their properties | read their own record |
 | Payments | everything | read for their properties; **add cash only**, confirmed, with a receipt | read their own; **report** a payment as *waiting for confirmation* |
 | Notices | everything | read for their properties and "all" | read for their property and "all" |

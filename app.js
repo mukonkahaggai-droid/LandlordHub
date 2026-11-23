@@ -27,13 +27,20 @@
     if (stripIds(state)) save();
     // Deductions were added later: give older saved data a sample history too.
     if (!Array.isArray(state.deductions)) { state.deductions = LH.seedDeductions(state, LH.today()); save(); }
+    // Rooms and tenancies were added later: older saved data is moved over (nothing is lost).
+    let sess0 = null; try { sess0 = JSON.parse(localStorage.getItem(SKEY)); } catch (e) {}
+    if (!(sess0 && sess0.member) && LH.migrate(state)) saveLocal();
     // Messages were added later: start with a couple of sample replies.
     if (!Array.isArray(state.messages)) { state.messages = LH.seedMessages(state, LH.today()); save(); }
     try { session = JSON.parse(localStorage.getItem(SKEY)); } catch (e) { session = null; }
   }
   function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage full or blocked */ } }
   // Saves on this device and, when syncing is on, sends what changed online (see sync.js).
-  function save() { saveLocal(); if (syncOn()) window.LHSync.push(); }
+  function save() {
+    // Rooms, tenancies and payment links stay complete (a tenant's or caretaker's phone only holds their share).
+    if (!(session && session.member)) LH.migrate(state);
+    saveLocal(); if (syncOn()) window.LHSync.push();
+  }
 
   /* ---------- Records online (Phase 3) ----------
      A landlord signed in with their phone number can keep their records online, so all their
@@ -112,7 +119,19 @@
   const rateNext = (u) => { const c = LH.nextRate(u, T()); return c ? ` · ${money(c.rent)} from ${fmtDay(parse(c.from))}` : ''; };
   // The three groups on the Properties tab.
   const propGroup = (p) => (p.kind === 'boarding' ? 'boarding' : p.kind === 'shops' ? 'shops' : 'homes');
-  const tenantIn = (u) => state.tenants.find((t) => t.unitId === u.id && !t.ended);
+  const tenantIn = (u) => {
+    const tn = (state.tenancies || []).find((x) => x.unitId === u.id && !x.moveOut);
+    return tn ? state.tenants.find((t) => t.id === tn.tenantId) : state.tenants.find((t) => t.unitId === u.id && !t.ended && !t.tenancyId);
+  };
+  const pastTenants = () => state.tenants.filter((t) => t.ended);
+  // Rooms of a property (in the order they were added) and the spaces in a room.
+  const roomsOf = (pid) => (state.rooms || []).filter((r) => r.propertyId === pid);
+  const unitsIn = (room) => state.units.filter((u) => u.roomId === room.id).sort((a, b) => (a.spaceNo || 0) - (b.spaceNo || 0));
+  // What a space is called inside its room: "Bed 2", "Space 1" (or the part of its name after the room).
+  const spaceName = (u, room) => (u.label.startsWith(room.name + ' · ') ? u.label.slice(room.name.length + 3) : u.label);
+  // Default names for new rooms and spaces, by kind of property.
+  const roomWord = (p) => ({ shops: 'Shop', boarding: 'Room', flats: 'Flat', house: 'House' }[p.kind] || 'Room');
+  const spaceWord = (p) => (p.kind === 'boarding' ? 'Bed' : 'Space');
   const acct = (t) => LH.account(state, t, T());
   const first = (name) => name.split(' ')[0];
   const initials = (name) => String(name || '').replace(/[^\p{L}\s]/gu, '').trim().split(/\s+/).map((s) => s[0] || '').slice(0, 2).join('').toUpperCase();
@@ -741,8 +760,9 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       partial: all.filter((s) => s.a.status === 'partial'),
       due: all.filter((s) => s.a.status === 'due'),
       paid: all.filter((s) => s.a.status === 'paid'),
+      past: pastTenants().map((t) => ({ t, a: acct(t) })),
     };
-    const chips = [['all', 'All'], ['late', 'Late'], ['partial', 'Part paid'], ['due', 'Due soon'], ['paid', 'Paid']];
+    const chips = [['all', 'All'], ['late', 'Late'], ['partial', 'Part paid'], ['due', 'Due soon'], ['paid', 'Paid'], ['past', 'Past']];
     return `${head('Tenants', { sub: `${all.length} tenants across ${liveProps().length} properties`, action: `<button class="icon-btn" data-action="addTenant" aria-label="Add tenant">${icon('plus')}</button>` })}
       <div class="search"><label class="sr" for="tq">Search tenants</label>${icon('search', 'sm')}<input id="tq" class="input" type="search" placeholder="Search by name, phone or house" value="${esc(ui.tenantQuery)}" data-input="tenantSearch" autocomplete="off"></div>
       <div class="chips mt" role="tablist">${chips.map(([k, l]) => `<button class="chip${ui.tenantFilter === k ? ' active' : ''}" data-action="tenantFilter" data-f="${k}" role="tab" aria-selected="${ui.tenantFilter === k}">${l}<span class="count">${groups[k].length}</span></button>`).join('')}</div>
@@ -760,13 +780,16 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     if (!t) return head('Tenant not found', { back: 'tenants' });
     const a = acct(t), u = a.unit, net = LH.network(t.phone);
     const entries = [
-      ...a.periods.map((p) => ({ date: p.due, label: `${u.period === 'term' ? '' : 'Rent · '}${p.label}`, amount: p.amount, kind: 'charge' })),
+      ...a.periods.map((p) => ({ date: p.due, label: `${u.period === 'term' ? '' : 'Rent · '}${p.label}${LH.tenanciesOf(state, t).length > 1 && p.space ? ` · ${p.space}` : ''}`, amount: p.amount, kind: 'charge' })),
       ...a.payments.map((p) => ({ date: parse(p.date), label: `${p.method}${p.ref ? ' · ' + p.ref : ''}`, amount: -p.amount, kind: 'pay', id: p.id })),
     ].sort((x, y) => x.date - y.date || (x.kind === 'charge' ? -1 : 1));
     let run = 0;
     entries.forEach((e) => { run += e.amount; e.bal = run; });
     const shown = entries.reverse().slice(0, 12);
     const reqs = state.requests.filter((r) => r.tenantId === t.id);
+    const tenancies = LH.tenanciesOf(state, t).slice().reverse();
+    const tnSpace = (tn) => { const u = LH.spaceOf(state, tn); const pr = byId(state.properties, (u && u.propertyId) || tn.propertyId); return `${u ? u.label : 'A space'}${pr ? ', ' + pr.name : ''}`; };
+    const tnPaid = (tn) => sum(a.payments.filter((p) => p.tenancyId === tn.id), (p) => p.amount);
 
     const big = a.balance > 0 ? money(a.balance) : a.balance < 0 ? money(-a.balance) : 'K0';
     const bigLabel = a.balance > 0 ? 'Owes' : a.balance < 0 ? 'In credit' : 'Balance';
@@ -829,10 +852,20 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       <section class="section"><div class="section-head"><h2>Repairs</h2></div>
         <div class="list">${reqs.length ? reqs.map(requestRow).join('') : '<div class="empty">No repair requests.</div>'}</div>
       </section>
+      <section class="section"><div class="section-head"><h2>Tenancies</h2><span class="small faint">${tenancies.length === 1 ? 'Where they live' : 'Newest first'}</span></div>
+        <div class="list">${tenancies.map((tn) => `<div class="row static" style="align-items:flex-start"><span class="tile ${tn.moveOut ? 'neutral' : ''}">${icon(tn.moveOut ? 'door' : 'home')}</span>
+          <div class="grow"><div class="title">${esc(tnSpace(tn))}</div>
+            <div class="meta">${tn.moveOut ? `${fmtDate(parse(tn.moveIn))} – ${fmtDate(parse(tn.moveOut))}` : `Since ${fmtDate(parse(tn.moveIn))}${tn.chargeFrom && tn.chargeFrom > iso(T()) ? ` · rent from ${fmtDate(parse(tn.chargeFrom))}` : ''}`}</div>
+            <div class="meta">${money(tnPaid(tn))} paid during this tenancy</div></div>
+          ${tn.moveOut ? '' : '<span class="pill paid">Now</span>'}</div>`).join('') || '<div class="empty">No tenancy yet.</div>'}</div>
+        <div class="btn-row mt-s">${t.ended
+          ? `<button class="btn primary" data-action="bringBack" data-id="${t.id}">${icon('plus', 'sm')}Bring ${esc(first(t.name))} back</button>`
+          : `<button class="btn" data-action="moveTenant" data-id="${t.id}">${icon('swap', 'sm')}Move to another room</button>`}</div>
+      </section>
       <section class="section"><div class="list">
         <a class="row" href="#/reference/${t.id}"><span class="tile neutral">${icon('shield')}</span><div class="grow"><div class="title">Rent reference</div><div class="meta">Their payment record, for a future landlord</div></div>${icon('chev', 'chev')}</a>
         <button class="row" data-action="noticeTo" data-id="${t.id}"><span class="tile neutral">${icon('file')}</span><div class="grow"><div class="title">Send a letter</div><div class="meta">Late notice, rent change, notice to vacate</div></div>${icon('chev', 'chev')}</button>
-        <button class="row" data-action="endTenancy" data-id="${t.id}"><span class="tile neutral">${icon('door')}</span><div class="grow"><div class="title">End tenancy</div><div class="meta">Frees ${esc(u.label)} for a new tenant</div></div>${icon('chev', 'chev')}</button>
+        ${t.ended ? '' : `<button class="row" data-action="endTenancy" data-id="${t.id}"><span class="tile neutral">${icon('door')}</span><div class="grow"><div class="title">End tenancy</div><div class="meta">Frees ${esc(u.label)} for a new tenant. Their history stays.</div></div>${icon('chev', 'chev')}</button>`}
       </div></section>
       </div></div>`;
   };
@@ -873,26 +906,27 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const units = state.units.filter((u) => u.propertyId === p.id);
     const care = state.caretakers.filter((c) => c.propertyIds.includes(p.id));
     const boarding = p.kind === 'boarding';
-    const row = (u) => {
-      const t = tenantIn(u);
-      if (t) return tenantRow(t).replace(`<div class="meta">${esc(where(t))}</div>`, `<div class="meta">${esc(u.label)} · ${money(rateNow(u).rent)}/${perLabel(u)}${rateNext(u)}</div>`);
-      return `<div class="row-wrap"><div class="row static"><span class="tile neutral">${icon(boarding ? 'user' : p.kind === 'shops' ? 'building' : 'door')}</span><div class="grow"><div class="title">${esc(u.label)}</div><div class="meta">Empty · ${money(rateNow(u).rent)}/${perLabel(u)}${rateNext(u)}</div></div></div><button class="btn sm" data-action="addTenant" data-unit="${u.id}">Add tenant</button></div>`;
+    // Each room with its spaces. A space shows who lives there (tap to open them) or, if it's
+    // empty, an "Add tenant" button for that exact space.
+    const rooms = roomsOf(p.id);
+    const spaceRow = (u, room) => {
+      const t = tenantIn(u), many = unitsIn(room).length > 1;
+      const name = many ? spaceName(u, room) : 'Lives here';
+      if (t) return tenantRow(t).replace(`<div class="meta">${esc(where(t))}</div>`, `<div class="meta">${esc(name)}</div>`);
+      return `<div class="row-wrap"><div class="row static"><span class="tile neutral">${icon('plus')}</span><div class="grow"><div class="title">${esc(many ? spaceName(u, room) : 'Empty')}</div><div class="meta">${many ? 'Empty · ' : ''}${money(rateNow(u).rent)}/${perLabel(u)}${rateNext(u)}</div></div></div><button class="btn primary sm" data-action="addTenant" data-unit="${u.id}">Add tenant</button></div>`;
     };
-    // Boarding houses: one section per house, showing how many of its bed spaces are taken.
-    const houses = boarding ? [...new Set(units.map(houseOf))] : [];
-    const body = boarding
-      ? houses.map((h) => {
-          const us = units.filter((u) => houseOf(u) === h), occ = us.filter((u) => tenantIn(u)), free = us.length - occ.length;
-          const freeUnit = us.find((u) => !tenantIn(u));
-          // Who lives in this house, then one line for the free bed spaces.
-          return `<section class="section"><div class="section-head"><div><h2>${esc(h)}</h2><div class="small muted num">${occ.length} of ${us.length} bed spaces taken</div></div><button class="link-btn" data-action="editHouse" data-pid="${p.id}" data-house="${esc(h)}">Edit house</button></div>
-            <div class="list">${occ.map(row).join('')}
-              <div class="row-wrap house-free"><div class="row static"><span class="tile ${free ? '' : 'neutral'}">${icon(free ? 'plus' : 'check')}</span><div class="grow"><div class="title">${free ? `${free} bed space${free === 1 ? '' : 's'} free` : 'House is full'}</div><div class="meta">${money(rateNow(us[0]).rent)} per bed, per term${rateNext(us[0])}</div></div></div>
-              ${free ? `<button class="btn primary sm" data-action="addTenant" data-unit="${freeUnit.id}">Add tenant</button>` : ''}</div>
-            </div></section>`; }).join('') || '<div class="empty">No bed spaces yet. Tap “Bed spaces”.</div>'
-      : `<div class="list">${units.map(row).join('') || '<div class="empty">Nothing here yet. Tap “Add”.</div>'}</div>`;
-    return `${head(p.name, { back: 'properties', sub: `${esc(p.area)}${boarding ? ` · ${houses.length} house${houses.length === 1 ? '' : 's'}, ${units.length} bed spaces` : ''}`, action: `<div class="head-actions"><button class="btn sm" data-action="editProperty" data-id="${p.id}">${icon('edit', 'sm')}Edit</button><button class="btn sm" data-action="addUnit" data-id="${p.id}">${icon('plus', 'sm')}${boarding ? 'Beds' : 'Add'}</button></div>` })}
-      ${boarding ? body.replace('<section class="section">', '<section class="section" style="margin-top:4px">') : body}
+    const roomCard = (room) => {
+      const us = unitsIn(room), taken = us.filter((u) => tenantIn(u)).length;
+      const rents = [...new Set(us.map((u) => rateNow(u).rent))];
+      const rentText = rents.length === 1 ? `${money(rents[0])}/${perLabel(us[0])}${us.length > 1 ? ' per space' : ''}` : 'Rents differ';
+      return `<section class="section room"><div class="section-head"><div><h2>${esc(room.name)}</h2><div class="small muted num">${rentText}${us.length > 1 ? ` · ${taken} of ${us.length} spaces taken` : ''}</div></div><button class="link-btn" data-action="editRoom" data-id="${room.id}">Edit</button></div>
+        <div class="list">${us.map((u) => spaceRow(u, room)).join('') || '<div class="empty">No spaces.</div>'}</div></section>`;
+    };
+    const spacesHere = rooms.flatMap(unitsIn);
+    const free = spacesHere.filter((u) => !tenantIn(u)).length;
+    const body = rooms.length ? rooms.map(roomCard).join('') : `<div class="empty">${icon('building')}<div class="mt-s">No rooms yet.</div><button class="btn primary mt" data-action="addRooms" data-id="${p.id}">${icon('plus', 'sm')}Add rooms</button></div>`;
+    return `${head(p.name, { back: 'properties', sub: `${esc(p.area)} · ${rooms.length} room${rooms.length === 1 ? '' : 's'}${spacesHere.length !== rooms.length ? `, ${spacesHere.length} spaces` : ''} · ${free} free`, action: `<div class="head-actions"><button class="btn sm" data-action="editProperty" data-id="${p.id}">${icon('edit', 'sm')}Edit</button><button class="btn sm" data-action="addRooms" data-id="${p.id}">${icon('plus', 'sm')}Rooms</button></div>` })}
+      ${body}
       <section class="section"><div class="section-head"><h2>Caretaker</h2><a href="#/caretakers">Manage</a></div>
         <div class="list">${care.length ? care.map((c) => `<div class="row static"><span class="avatar">${initials(c.name)}</span><div class="grow"><div class="title">${esc(c.name)}</div><div class="meta">${LH.prettyPhone(c.phone)} · records cash payments</div></div></div>`).join('') : '<div class="empty">No caretaker for this property.</div>'}</div>
       </section>
@@ -1546,6 +1580,8 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     }
     p.id = p.id || LH.uid('p');
     p.at = Date.now();
+    const who = byId(state.tenants, p.tenantId);
+    if (who && who.tenancyId && !p.tenancyId) p.tenancyId = who.tenancyId;
     state.payments.push(p);
     save();
     return p;
@@ -1798,6 +1834,18 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   }
 
   function addTenantSheet(unitId) { tenantFormSheet(null, unitId); }
+  // Move a tenant to another space. The new space is theirs today; its rent starts next period.
+  function moveSheet(id) {
+    const t = byId(state.tenants, id); if (!t) return;
+    const groups = placeChoices(null);
+    const tn = LH.currentTenancy(state, t);
+    const np = tn ? LH.nextPeriodStart(state, tn, T()) : { next: T() };
+    openSheet(`${sheetHead(`Move ${esc(first(t.name))}`)}
+      <p class="muted">Now in <strong>${esc(where(t))}</strong>.</p>
+      ${groups.length ? `<label class="field mt"><span class="label">Moving to</span><select class="input" name="moveTo">${groups.map((g) => `<optgroup label="${esc(g.label)}">${g.opts.map((o) => `<option value="${esc(o.value)}">${esc(o.text)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+      <div class="banner">${icon('info', 'sm')}<span>The new space is ${esc(first(t.name))}'s from today. Rent for it starts at the next rent period (${fmtDate(np.next)}); the current period stays at the old rent. Past payments stay with this tenancy.</span></div>
+      <button class="btn primary block lg mt" data-action="confirmMove" data-id="${t.id}">Move ${esc(first(t.name))}</button>` : '<div class="empty">There is no empty space to move to. Add a room first.</div>'}`);
+  }
 
   /* One form for adding a tenant and for editing one later: every detail can be changed.
      The house/room list only offers the landlord's own (vacant ones, plus the tenant's current unit). */
@@ -1810,15 +1858,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     liveProps().forEach((p) => {
       const us = state.units.filter((u) => u.propertyId === p.id);
       const opts = [];
-      if (p.kind === 'boarding') {
-        [...new Set(us.map(houseOf))].forEach((h) => {
-          const inHouse = us.filter((u) => houseOf(u) === h), free = inHouse.filter((u) => !tenantIn(u)).length;
-          const mine = t && inHouse.some((u) => u.id === t.unitId);
-          if (free || mine) opts.push({ value: `h:${p.id}|${h}`, text: `${h} · ${free} of ${inHouse.length} bed spaces free · ${money(rateNow(inHouse[0]).rent)}/term`, unit: inHouse[0] });
-        });
-      } else {
-        us.filter((u) => !tenantIn(u) || (t && u.id === t.unitId)).forEach((u) => opts.push({ value: u.id, text: `${u.label} · ${money(rateNow(u).rent)}/${perLabel(u)}`, unit: u }));
-      }
+      us.filter((u) => !tenantIn(u) || (t && u.id === t.unitId)).forEach((u) => opts.push({ value: u.id, text: `${u.label} · ${money(rateNow(u).rent)}/${perLabel(u)}`, unit: u }));
       if (opts.length) groups.push({ label: p.name, opts });
     });
     return groups;
@@ -1850,20 +1890,28 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const groups = placeChoices(t);
     const units = groups.flatMap((g) => g.opts);
     const pre = t ? t.unitId : unitId;
-    let sel = pre && isBoarding(unitById(pre)) ? houseValue(unitById(pre)) : pre;
+    let sel = pre; // the exact space that was tapped
     const due = t ? t.dueDay || 1 : 1;
     const every = t ? Math.max(1, Number(t.every) || 1) : 1;
     if (!sel && units.length) sel = units[0].value;
     openSheet(`${sheetHead(editing ? `Edit ${first(t.name)}'s details` : 'Add a tenant')}
       <form data-form="${editing ? 'editTenant' : 'addTenant'}" autocomplete="off">
         ${editing ? `<input type="hidden" name="id" value="${t.id}">` : ''}
-        <label class="field"><span class="label">Full name</span><input class="input" name="name" required placeholder="e.g. Mapalo Chirwa" value="${editing ? esc(t.name) : ''}" ${editing ? '' : 'autofocus'}></label>
+        <div id="new-person">
+        <label class="field"><span class="label">Full name</span><input class="input" name="name" required placeholder="e.g. Mapalo Chirwa" value="${editing ? esc(t.name) : ''}"></label>
         <label class="field"><span class="label">Phone number</span><div class="input-group"><span class="prefix">+260</span><input class="input" name="phone" type="tel" inputmode="tel" required placeholder="96 123 4567" data-input="phoneNet" value="${editing ? esc(LH.cleanPhone(t.phone).slice(1)) : ''}"></div><div class="help" id="net-help">${editing ? 'Their app account uses this number to sign in.' : 'After saving, you can send them a link to join you on the app.'}</div></label>
         <div class="field"><span class="label">Other lines they pay from <span class="faint" style="font-weight:400">(optional)</span></span>
           <div class="lines" id="lines">${(editing ? t.lines || [] : []).map(lineRow).join('')}</div>
           <button type="button" class="btn sm block mt-s" data-action="addLine">${icon('plus', 'sm')}Add another line</button>
           <div class="help">Add every MTN, Airtel or Zamtel number they might send rent from. Money from any of these lines is matched to ${editing ? esc(first(t.name)) : 'this tenant'}.</div></div>
-        <label class="field"><span class="label">Where will they live?</span><select class="input" name="unit" required data-input="tenantUnit">
+        </div>
+        ${editing ? `<div class="field"><span class="label">Where they live</span><div class="card pad" style="background:var(--surface-2)"><strong>${esc(where(t))}</strong><div class="small muted">To move ${esc(first(t.name))} to another room, use <em>Move to another room</em> on their page. Their past rent stays as it was.</div></div><input type="hidden" name="unit" value="${esc(t.unitId)}"></div>` : `
+        <fieldset class="field" ${pastTenants().length ? '' : 'hidden'}><legend class="label">Who is moving in?</legend><div class="seg">
+          <label><input type="radio" name="who" value="new" checked data-input="whoMoves"><span>Someone new</span></label>
+          <label><input type="radio" name="who" value="returning" data-input="whoMoves"><span>Someone who rented before</span></label>
+        </div>
+        <label class="field mt-s" id="returning-field" hidden><span class="label">Who is coming back?</span><select class="input" name="returning" disabled>${pastTenants().map((x) => `<option value="${x.id}">${esc(x.name)} · left ${fmtDate(parse(x.ended))}</option>`).join('')}</select><div class="help">Their past tenancies and payments stay with them.</div></label></fieldset>`}
+        <label class="field" ${editing ? 'hidden' : ''}><span class="label">Where will they live?</span><select class="input" name="unit" required data-input="tenantUnit" ${editing ? 'disabled' : ''}>
           ${units.length ? groups.map((g) => `<optgroup label="${esc(g.label)}">${g.opts.map((o) => `<option value="${esc(o.value)}" ${o.value === sel ? 'selected' : ''}>${esc(o.text)}</option>`).join('')}</optgroup>`).join('') : '<option value="">Nothing empty — add a house or room first</option>'}
         </select><div class="help" id="place-help">${String(sel).startsWith('h:') ? placeHelp(sel, t) : ''}</div></label>
         <label class="field"><span class="label">Moves in</span><input class="input" type="date" name="since" value="${editing ? esc(t.since) : iso(T())}" required></label>
@@ -2049,48 +2097,133 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   function addPropertySheet() {
     openSheet(`${sheetHead('Add a property')}
       <form data-form="addProperty" autocomplete="off">
-        <div id="add-fields">
         <div class="field"><span class="label">What kind of property?</span><div class="seg">
           <label><input type="radio" name="kind" value="flats" checked data-input="propKind"><span>Flats or houses</span></label>
-          <label><input type="radio" name="kind" value="boarding" data-input="propKind"><span>Boarding house (bed spaces)</span></label>
+          <label><input type="radio" name="kind" value="boarding" data-input="propKind"><span>Boarding house</span></label>
           <label><input type="radio" name="kind" value="shops" data-input="propKind"><span>Shops</span></label>
-        </div><div class="help">Choose this first: the questions below change to match.</div></div>
+        </div><div class="help">Choose this first: the questions change to match.</div></div>
         <label class="field"><span class="label">Property name</span><input class="input" name="name" required placeholder="e.g. Chelstone Flats"></label>
-        <label class="field"><span class="label">Area and town</span><input class="input" name="area" required placeholder="e.g. Chelstone, Lusaka"></label>
-        <div id="flats-fields">
-          <div class="btn-row">
-            <label class="field" style="flex:1"><span class="label" id="count-label">How many flats or houses?</span><input class="input" name="count" type="number" min="1" max="60" value="4"></label>
-            <label class="field" style="flex:1"><span class="label">Rent each, per month</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" value="3500"></div></label>
-          </div>
-          <label class="field"><span class="label">Service charge each <span class="faint" style="font-weight:400">(optional)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="service" type="number" min="0" value="0"></div><div class="help" id="service-help">For example LWSC water, ZESCO share or security.</div></label>
-        </div>
-        <div id="boarding-fields" hidden>
-          <label class="field"><span class="label">How many houses are on this property?</span>
-            <div class="due-row"><input class="input due-input num" name="houses" type="number" inputmode="numeric" min="1" max="20" value="2" data-input="houseCount"><span class="due-said">houses, each with its own bed spaces</span></div></label>
-          <div class="field"><span class="label">Bed spaces in each house</span><div class="house-list" id="house-list">${houseRows(2)}</div></div>
-          <div class="house-total" id="house-total">${houseTotal([6, 6])}</div>
-          <div class="btn-row mt">
-            <label class="field" style="flex:1"><span class="label">Rent per bed space, per term</span><div class="input-group"><span class="prefix">K</span><input class="input" name="bedRent" type="number" min="1" value="3500"></div></label>
-            <label class="field" style="flex:1"><span class="label">Service charge per bed <span class="faint" style="font-weight:400">(optional)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="bedService" type="number" min="0" value="0"></div></label>
-          </div>
-          <div class="help" style="margin:-6px 0 14px">Terms start in January, May and September. You can change the rent of any single bed space later.</div>
-        </div>
+        <label class="field"><span class="label">Location</span><input class="input" name="area" required placeholder="e.g. Chelstone, Lusaka"></label>
+        <button class="btn primary block lg" type="submit">Save and add rooms</button>
+        <p class="small faint mt">Next you'll say how many rooms it has and how many people each room takes.</p>
+      </form>`);
+  }
+
+  /* Rooms for a property: how many, and for each its name, how many spaces (people) it takes and
+     the rent per space. Tapping "Check and add" shows what will be created; "Yes, add them" saves. */
+  function roomsSheet(pid) {
+    const p = byId(state.properties, pid); if (!p) return;
+    const have = roomsOf(pid).length, term = p.kind === 'boarding';
+    const n0 = have ? 1 : p.kind === 'boarding' ? 3 : p.kind === 'shops' ? 3 : 4;
+    openSheet(`${sheetHead(have ? `Add rooms to ${esc(p.name)}` : `Rooms at ${esc(p.name)}`)}
+      <form data-form="addRooms" autocomplete="off"><input type="hidden" name="pid" value="${pid}">
+        <div id="add-fields">
+        <label class="field"><span class="label">How many ${have ? 'more ' : ''}rooms?</span>
+          <div class="due-row"><input class="input due-input num" name="rooms" type="number" inputmode="numeric" min="1" max="60" value="${n0}" data-input="roomCount"><span class="due-said">${p.kind === 'shops' ? 'shops' : p.kind === 'boarding' ? 'rooms' : 'flats or houses'}</span></div></label>
+        <label class="field"><span class="label">People (spaces) in each room</span>
+          <div class="due-row"><input class="input due-input num" name="spaces" type="number" inputmode="numeric" min="1" max="20" value="${term ? 2 : 1}" data-input="roomCount"><span class="due-said">${term ? 'beds per room' : 'per room (1 for a whole flat or shop)'}</span></div>
+          <div class="help">You can change any single room below.</div></label>
+        <label class="field" id="rent-each"><span class="label">Rent per space, per ${term ? 'term' : 'month'}</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" value="${term ? 3500 : 3500}" data-input="roomCount"></div></label>
+        <label class="check same-rent"><input type="checkbox" name="sameRent" checked data-input="roomCount"><span><strong>Same rent for every space</strong><span class="small muted" style="display:block">Untick to set a rent for each room.</span></span></label>
+        <div class="field"><span class="label">Each room</span>
+          <div class="room-head"><span>Name</span><span>Spaces</span><span class="room-rent-col">Rent</span></div>
+          <div class="unit-rent-list" id="room-rows"></div></div>
+        <label class="field"><span class="label">Service charge per space <span class="faint" style="font-weight:400">(optional)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="service" type="number" min="0" value="0"></div><div class="help">For example LWSC water, ZESCO share or security.</div></label>
+        ${term ? '<div class="help" style="margin:-6px 0 14px">Terms start in January, May and September.</div>' : ''}
         </div>
         <div id="add-review" class="add-review" hidden></div>
         <button class="btn primary block lg" type="submit" id="add-submit">Check and add</button>
         <button class="btn ghost block mt-s" type="button" data-action="addPropBack" id="add-back" hidden>Go back and change</button>
       </form>`);
+    roomRows(sheetRoot.querySelector('form[data-form="addRooms"]'));
   }
+  // One row per room: name, number of spaces, and (when rents differ) its rent per space.
+  function roomRows(form) {
+    const p = byId(state.properties, form.pid.value), have = roomsOf(p.id).length;
+    const n = Math.min(60, Math.max(0, Math.round(Number(form.rooms.value) || 0)));
+    const same = form.sameRent.checked;
+    const keep = [...form.querySelectorAll('#room-rows .room-row')].map((r) => ({ name: r.querySelector('[name=roomName]').value, spaces: r.querySelector('[name=roomSpaces]').value, rent: r.querySelector('[name=roomRent]').value, touched: r.dataset.touched === '1' }));
+    let out = '';
+    for (let i = 0; i < n; i++) {
+      const k = keep[i] || {};
+      const name = k.name && !/^(Flat|Shop|Room|House) \d+$/.test(k.name) ? k.name : `${roomWord(p)} ${have + i + 1}`;
+      const spaces = k.touched ? k.spaces : form.spaces.value;
+      out += `<div class="room-row" data-touched="${k.touched ? 1 : 0}"><span class="house-no num">${have + i + 1}</span>
+        <label class="grow"><span class="sr">Name of room ${i + 1}</span><input class="input" name="roomName" value="${esc(name)}" required></label>
+        <label class="room-spaces"><span class="sr">Spaces in room ${i + 1}</span><input class="input num" name="roomSpaces" type="number" inputmode="numeric" min="1" max="20" value="${esc(spaces || 1)}" required data-input="roomSpaces"></label>
+        <label class="room-rent-col"${same ? ' hidden' : ''}><span class="sr">Rent per space in room ${i + 1}</span><div class="input-group"><span class="prefix">K</span><input class="input num" name="roomRent" type="number" inputmode="decimal" min="1" value="${esc(k.rent || form.rent.value || '')}" ${same ? 'disabled' : ''} required></div></label></div>`;
+    }
+    form.querySelector('#room-rows').innerHTML = out;
+    form.querySelector('#rent-each').hidden = !same;
+    form.querySelectorAll('.room-rent-col').forEach((x) => { x.hidden = !same ? false : true; });
+  }
+
+  /* Edit one room: its name, how many spaces it has (never fewer than people living in it) and
+     the rent per space, from a chosen start (earlier periods keep the old rent). */
+  function editRoomSheet(roomId) {
+    const room = (state.rooms || []).find((r) => r.id === roomId); if (!room) return;
+    const p = byId(state.properties, room.propertyId), us = unitsIn(room);
+    const taken = us.filter((u) => tenantIn(u)).length, term = (us[0] || {}).period === 'term';
+    openSheet(`${sheetHead(`Edit ${esc(room.name)}`)}
+      <form data-form="editRoom" autocomplete="off"><input type="hidden" name="id" value="${room.id}">
+        <label class="field"><span class="label">Name of the room</span><input class="input" name="name" required value="${esc(room.name)}"></label>
+        <div class="field"><label class="label" for="room-spaces">People (spaces) in this room</label>
+          <div class="due-row"><input class="input due-input num" id="room-spaces" name="spaces" type="number" inputmode="numeric" min="${Math.max(1, taken)}" max="20" required value="${us.length}"><span class="due-said">${taken} ${taken === 1 ? 'person lives' : 'people live'} here now</span></div>
+          <div class="help">${taken ? `Can't go below ${taken}: removing spaces only removes empty ones.` : 'Removing spaces only removes empty ones.'}</div></div>
+        <label class="field"><span class="label">Rent per space, per ${term ? 'term' : 'month'}</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" required value="${us[0] ? rateNow(us[0]).rent : ''}"></div><div class="help">Applies to every space in this room. To give one space its own rent, use Edit → Change rents one by one on the property.</div></label>
+        <label class="field"><span class="label">If the rent changes, it starts</span>${startSelect(term)}</label>
+        <button class="btn primary block lg" type="submit">Save room</button>
+        ${us.every((u) => !tenantIn(u)) && !(state.tenancies || []).some((tn) => us.some((u) => u.id === tn.unitId)) ? `<button class="btn ghost block mt-s danger" type="button" data-action="deleteRoom" data-id="${room.id}">Delete this room</button>` : ''}
+      </form>`);
+  }
+  // New spaces for a room (a single space is named after the room; several get "Bed 1", "Space 2"…).
+  function addSpaces(room, p, count, rent, service, startNo) {
+    const term = p.kind === 'boarding';
+    for (let i = 0; i < count; i++) {
+      const no = startNo + i;
+      state.units.push({ id: LH.uid('U'), propertyId: p.id, roomId: room.id, spaceNo: no, house: room.name, label: '', rent, service, serviceName: 'Service charge', period: term ? 'term' : 'month' });
+    }
+    relabel(room, p);
+  }
+  // Space names follow the room: one space = the room's name; several = "Room 2 · Bed 1"…
+  function relabel(room, p) {
+    const us = unitsIn(room), many = us.length > 1;
+    us.forEach((u, i) => { u.spaceNo = i + 1; u.house = room.name; u.label = many ? `${room.name} · ${spaceWord(p)} ${i + 1}` : room.name; });
+  }
+
   // One row per house: its name and how many bed spaces it has.
   function houseRows(n, keep = []) {
     let out = '';
     for (let i = 0; i < n; i++) {
       const k = keep[i] || { name: `House ${i + 1}`, beds: 6 };
       out += `<div class="house-row"><span class="house-no num">${i + 1}</span>
-        <label class="grow"><span class="sr">Name of house ${i + 1}</span><input class="input" name="houseName" value="${esc(k.name)}" required></label>
+        <label class="grow"><span class="sr">Name of house ${i + 1}</span><input class="input" name="houseName" value="${esc(k.name)}" required data-input="houseRentsSync"></label>
         <label class="house-beds"><span class="sr">Bed spaces in house ${i + 1}</span><input class="input num" name="houseBeds" type="number" inputmode="numeric" min="1" max="40" value="${k.beds}" required data-input="houseBeds"></label><span class="house-unit">beds</span></div>`;
     }
     return out;
+  }
+  // One row per flat, house or shop: its name and rent (when they don't all cost the same).
+  function unitRentRows(form) {
+    const kind = form.querySelector('[name=kind]:checked').value, word = kind === 'shops' ? 'Shop' : 'House';
+    const n = Math.min(60, Math.max(0, Math.round(Number(form.count.value) || 0)));
+    const keep = [...form.querySelectorAll('#unit-rents .unit-rent-row')].map((r) => ({ name: r.querySelector('[name=unitName]').value, rent: r.querySelector('[name=unitRent]').value }));
+    let out = '';
+    for (let i = 0; i < n; i++) {
+      const k = keep[i] || {};
+      // Untouched default names follow the kind of property ("House 2" ↔ "Shop 2").
+      const name = !k.name || /^(House|Shop) \d+$/.test(k.name) ? `${word} ${i + 1}` : k.name;
+      out += `<div class="unit-rent-row"><span class="house-no num">${i + 1}</span>
+        <label class="grow"><span class="sr">Name of ${word.toLowerCase()} ${i + 1}</span><input class="input" name="unitName" value="${esc(name)}" required></label>
+        <label class="unit-rent"><span class="sr">Rent for ${word.toLowerCase()} ${i + 1}</span><div class="input-group"><span class="prefix">K</span><input class="input num" name="unitRent" type="number" inputmode="decimal" min="1" value="${esc(k.rent || form.rent.value || '')}" required></div></label></div>`;
+    }
+    form.querySelector('#unit-rents').innerHTML = out;
+  }
+  // One rent per house in a boarding house, labelled with the house names typed above.
+  function houseRentRows(form) {
+    const names = [...form.querySelectorAll('[name=houseName]')].map((x) => x.value.trim() || 'House');
+    const keep = [...form.querySelectorAll('#house-rents [name=houseRent]')].map((x) => x.value);
+    form.querySelector('#house-rents').innerHTML = names.map((h, i) => `<div class="unit-rent-row"><span class="grow house-rent-name">${esc(h)}</span>
+      <label class="unit-rent"><span class="sr">Rent per bed in ${esc(h)}</span><div class="input-group"><span class="prefix">K</span><input class="input num" name="houseRent" type="number" inputmode="decimal" min="1" value="${esc(keep[i] || form.bedRent.value || '')}" required></div></label></div>`).join('');
   }
   const houseTotal = (beds) => { const t = beds.reduce((s, b) => s + (Number(b) || 0), 0); return `${beds.length} house${beds.length === 1 ? '' : 's'} · <strong>${t} bed spaces</strong> in total`; };
   // Which house a bed space belongs to: saved on new ones; older ones are read from the name ("Room 1 · Bed A").
@@ -2426,8 +2559,19 @@ We never sell your data or use it for adverts.</div>
       form.querySelector('#add-review').hidden = true;
       form.querySelector('#add-submit').textContent = 'Check and add';
       el.hidden = true;
+      if (form.dataset.form === 'addRooms') roomRows(form);
     },
     editProperty: (d) => editPropertySheet(d.id),
+    addRooms: (d) => roomsSheet(d.id),
+    editRoom: (d) => editRoomSheet(d.id),
+    deleteRoom: (d) => {
+      const room = (state.rooms || []).find((r) => r.id === d.id); if (!room) return;
+      const us = unitsIn(room);
+      if (us.some((u) => tenantIn(u)) || (state.tenancies || []).some((tn) => us.some((u) => u.id === tn.unitId))) return toast('Someone has rented this room, so it is kept for their history');
+      state.units = state.units.filter((u) => u.roomId !== room.id);
+      state.rooms = state.rooms.filter((r) => r.id !== room.id);
+      log(`Deleted ${room.name}`); save(); closeSheet(); render(); toast(`${room.name} deleted`);
+    },
     editRents: (d) => editRentsSheet(d.id),
     rentNotice: (d) => newNoticeSheet({ tpl: 'increase', audience: d.ids.split(','), fills: { '[date]': fmtDate(parse(d.from)), '[current rent]': d.old ? money(Number(d.old)) : '', '[new rent]': d.new ? money(Number(d.new)) : '' } }),
     propFilter: (d) => {
@@ -2474,6 +2618,24 @@ We never sell your data or use it for adverts.</div>
       });
     },
     addTenant: (d) => addTenantSheet(d.unit),
+    moveTenant: (d) => moveSheet(d.id),
+    bringBack: (d) => {
+      const t = byId(state.tenants, d.id); if (!t) return;
+      tenantFormSheet(null, null);
+      const f = sheetRoot.querySelector('form[data-form="addTenant"]'); if (!f) return;
+      const r = f.querySelector('input[name=who][value=returning]'); r.checked = true; inputs.whoMoves(r);
+      f.returning.value = t.id;
+    },
+    confirmMove: (d) => {
+      const t = byId(state.tenants, d.id), sel = sheetRoot.querySelector('[name=moveTo]');
+      const unitId = sel && resolvePlace(sel.value, t);
+      if (!t || !unitId) return toast('Choose where they are moving to');
+      const from = unitOf(t).label, tn = LH.moveTenancy(state, t, unitId, T());
+      if (!tn) return toast("Couldn't move them. Choose a different space.");
+      log(`Moved ${t.name} from ${from} to ${unitOf(t).label}`);
+      save(); closeSheet(); render();
+      toast(`Moved to ${unitOf(t).label}. New rent from ${fmtDay(parse(tn.chargeFrom || tn.moveIn))}.`);
+    },
     addProperty: () => addPropertySheet(),
     addUnit: (d) => addUnitSheet(d.id),
     inviteCaretaker: () => inviteCaretakerSheet(),
@@ -2535,7 +2697,8 @@ We never sell your data or use it for adverts.</div>
         <div class="btn-row"><button class="btn" data-action="closeSheet">Cancel</button><button class="btn primary" data-action="confirmEnd" data-id="${t.id}">End tenancy</button></div>`);
     },
     confirmEnd: (d) => {
-      const t = byId(state.tenants, d.id); t.ended = iso(T());
+      const t = byId(state.tenants, d.id);
+      if (!LH.endTenancy(state, t, iso(T()))) t.ended = iso(T()); // records from before tenancies
       log(`Ended tenancy for ${t.name} (${unitOf(t).label})`);
       save(); closeSheet(); go('tenants'); toast(`${unitOf(t).label} is now vacant`);
     },
@@ -2968,20 +3131,35 @@ We never sell your data or use it for adverts.</div>
       toast(`Sent to ${count} tenant${count === 1 ? '' : 's'}`);
     },
     addTenant: (f) => {
-      const phone = LH.cleanPhone(f.get('phone'));
-      if (phone.length !== 10) return toast('Check the phone number');
+      const returning = f.get('who') === 'returning';
+      const phone = returning ? '' : LH.cleanPhone(f.get('phone'));
+      if (!returning && phone.length !== 10) return toast('Check the phone number');
       const dueDay = Math.round(Number(f.get('dueDay')));
       if (!(dueDay >= 1 && dueDay <= 31)) return toast('Rent due day must be from 1 to 31');
       const every = Math.round(Number(f.get('every')) || 1);
       if (!(every >= 1 && every <= 24)) return toast('Payment period must be from 1 to 24 months');
       const unitId = resolvePlace(f.get('unit'));
       if (!unitId) return toast('That house is full. Choose another house or add bed spaces.');
-      const t = { id: LH.uid('t'), name: f.get('name').trim(), phone, lines: readLines(f, phone), unitId, since: f.get('since'), dueDay, every, deposit: Number(f.get('deposit')) || 0, lang: f.get('lang') };
-      state.tenants.push(t);
-      inviteData(t); // creates their personal invite
-      log(`Added ${t.name} to ${unitOf(t).label}, ${propOf(unitOf(t)).name}`);
+      const since = f.get('since') || iso(T());
+      const back = f.get('who') === 'returning' ? byId(state.tenants, f.get('returning')) : null;
+      if (f.get('who') === 'returning' && !back) return toast('Choose who is coming back');
+      let t;
+      if (back) {
+        // Someone who rented before: a new tenancy on the same person, so all their history stays together.
+        t = back;
+        Object.assign(t, { lines: readLines(f, t.phone), lang: f.get('lang') || t.lang });
+        LH.startTenancy(state, t, unitId, since, { dueDay, every, deposit: Number(f.get('deposit')) || 0 });
+        log(`${t.name} came back, now in ${unitOf(t).label}, ${propOf(unitOf(t)).name}`);
+      } else {
+        t = { id: LH.uid('t'), name: f.get('name').trim(), phone, lines: readLines(f, phone), lang: f.get('lang') };
+        state.tenants.push(t);
+        LH.startTenancy(state, t, unitId, since, { dueDay, every, deposit: Number(f.get('deposit')) || 0 });
+        inviteData(t); // creates their personal invite
+        log(`Added ${t.name} to ${unitOf(t).label}, ${propOf(unitOf(t)).name}`);
+      }
       save(); closeSheet(); go('tenant/' + t.id);
-      setTimeout(() => inviteSheet(t.id, true), 450); // after the page has slid in
+      if (!back) setTimeout(() => inviteSheet(t.id, true), 450); // after the page has slid in
+      else toast(`Welcome back, ${first(t.name)}`);
     },
     editTenant: (f) => {
       const t = byId(state.tenants, f.get('id')); if (!t) return;
@@ -2989,13 +3167,14 @@ We never sell your data or use it for adverts.</div>
       if (phone.length !== 10) return toast('Check the phone number');
       const dueDay = Math.round(Number(f.get('dueDay')));
       if (!(dueDay >= 1 && dueDay <= 31)) return toast('Rent due day must be from 1 to 31');
-      const unitId = resolvePlace(f.get('unit'), t);
-      if (!unitId) return toast('That house is full. Choose another house or add bed spaces.');
-      const moved = t.unitId !== unitId;
       const every = Math.round(Number(f.get('every')) || 1);
       if (!(every >= 1 && every <= 24)) return toast('Payment period must be from 1 to 24 months');
-      Object.assign(t, { name: f.get('name').trim(), phone, lines: readLines(f, phone), unitId, since: f.get('since'), dueDay, every, deposit: Number(f.get('deposit')) || 0, lang: f.get('lang') });
-      log(`Updated ${t.name}'s details${moved ? `, now in ${unitOf(t).label}` : ''}`);
+      Object.assign(t, { name: f.get('name').trim(), phone, lines: readLines(f, phone), lang: f.get('lang') });
+      // The current tenancy's terms (moving to another space is its own step, so history isn't rewritten).
+      const tn = LH.currentTenancy(state, t);
+      if (tn && !tn.moveOut) Object.assign(tn, { dueDay, every, deposit: Number(f.get('deposit')) || 0, name: t.name, phone: t.phone, moveIn: f.get('since') || tn.moveIn });
+      LH.mirrorTenancy(state, t);
+      log(`Updated ${t.name}'s details`);
       save(); closeSheet(); render(); toast('Changes saved');
     },
     joinPhone: (f) => {
@@ -3023,51 +3202,74 @@ We never sell your data or use it for adverts.</div>
     },
     /* Adding a property takes two taps: "Check and add" shows what will be created, and only
        "Yes, add it" creates it. A slip of the finger (or the keyboard's Go key) never adds one. */
-    addProperty: (f, form) => {
-      const p = { id: LH.uid('P'), name: f.get('name').trim(), area: f.get('area').trim(), kind: ['flats', 'boarding', 'shops'].includes(f.get('kind')) ? f.get('kind') : 'flats' };
-      if (!p.name) return toast('Give the property a name');
-      if (!p.area) return toast('Enter the area and town');
-      const review = (summary) => {
-        if (form.dataset.step === 'review') return true; // second tap: go ahead
+    addProperty: (f) => {
+      const name = String(f.get('name') || '').trim(), area = String(f.get('area') || '').trim();
+      if (!name) return toast('Give the property a name');
+      if (!area) return toast('Enter the location');
+      const p = { id: LH.uid('P'), name, area, kind: ['flats', 'boarding', 'shops'].includes(f.get('kind')) ? f.get('kind') : 'flats' };
+      state.properties.push(p);
+      log(`Added ${p.name}`);
+      save(); closeSheet(); go('property/' + p.id);
+      setTimeout(() => roomsSheet(p.id), 450);
+    },
+    // Rooms: "Check and add" shows what will be created; only "Yes, add them" saves.
+    addRooms: (f, form) => {
+      const p = byId(state.properties, f.get('pid')); if (!p) return;
+      const names = f.getAll('roomName').map((x) => String(x).trim()), spaces = f.getAll('roomSpaces').map((x) => Math.round(Number(x)));
+      const same = !!f.get('sameRent'), rent = Math.round(Number(f.get('rent')));
+      const rents = same ? names.map(() => rent) : f.getAll('roomRent').map((x) => Math.round(Number(x)));
+      const service = Math.round(Number(f.get('service')) || 0), term = p.kind === 'boarding';
+      if (!names.length) return toast('Enter how many rooms');
+      if (names.some((x) => !x)) return toast('Give every room a name');
+      if (spaces.some((x) => !(x >= 1 && x <= 20))) return toast('Each room takes 1 to 20 people');
+      if (rents.some((x) => !(x > 0))) return toast(same ? 'Enter the rent per space' : 'Enter a rent for every room');
+      const taken = new Set(roomsOf(p.id).map((r) => r.name));
+      if (names.some((x) => taken.has(x)) || new Set(names).size !== names.length) return toast('Every room needs its own name');
+      const total = spaces.reduce((a, b) => a + b, 0);
+      if (form.dataset.step !== 'review') {
         form.dataset.step = 'review';
         form.querySelector('#add-fields').hidden = true;
         const box = form.querySelector('#add-review');
-        box.innerHTML = `<div class="r-cap">Check before adding</div><div class="add-review-name">${esc(p.name)}</div><div class="small muted">${esc(p.area)}</div><div class="add-review-sum">${summary}</div>`;
+        box.innerHTML = `<div class="r-cap">Check before adding</div><div class="add-review-name">${esc(p.name)}</div>
+          <div class="add-review-sum"><strong>${names.length} room${names.length === 1 ? '' : 's'}, ${total} space${total === 1 ? '' : 's'}</strong><br>${names.slice(0, 8).map((x, i) => `${esc(x)}: ${spaces[i]} ${spaces[i] === 1 ? 'space' : 'spaces'} · ${money(rents[i])} per ${term ? 'term' : 'month'}`).join('<br>')}${names.length > 8 ? `<br>and ${names.length - 8} more` : ''}${service ? `<br>+ ${money(service)} service charge per space` : ''}</div>`;
         box.hidden = false;
-        form.querySelector('#add-submit').textContent = 'Yes, add it';
+        form.querySelector('#add-submit').textContent = 'Yes, add them';
         form.querySelector('#add-back').hidden = false;
         sheetRoot.querySelector('.sheet').scrollTop = 0;
-        return false;
-      };
-      if (p.kind === 'boarding') {
-        // Houses, each with its own bed spaces: "House 1 · Bed 1", "House 1 · Bed 2" …
-        const names = f.getAll('houseName').map((s) => s.trim()), beds = f.getAll('houseBeds').map((b) => Math.round(Number(b)));
-        const rent = Number(f.get('bedRent'));
-        if (!names.length || names.some((s) => !s)) return toast('Give each house a name');
-        if (beds.some((b) => !(b >= 1 && b <= 40))) return toast('Each house needs 1 to 40 bed spaces');
-        if (!(rent > 0)) return toast('Enter the rent per bed space');
-        const totalBeds = beds.reduce((s, b) => s + b, 0), svc = Number(f.get('bedService')) || 0;
-        if (!review(`Boarding house · ${names.length} house${names.length === 1 ? '' : 's'}, <strong>${totalBeds} bed spaces</strong><br>${money(rent)} per bed, per term${svc ? ` + ${money(svc)} service charge` : ''}`)) return;
-        state.properties.push(p);
-        names.forEach((h, i) => { for (let b = 1; b <= beds[i]; b++) state.units.push({ id: LH.uid('U'), propertyId: p.id, house: h, label: `${h} · Bed ${b}`, rent, service: Number(f.get('bedService')) || 0, serviceName: 'Service charge', period: 'term' }); });
-        const total = beds.reduce((s, b) => s + b, 0);
-        log(`Added ${p.name}: ${names.length} house${names.length === 1 ? '' : 's'} with ${total} bed spaces`);
-        save(); closeSheet(); go('property/' + p.id); toast(`${p.name} added with ${total} bed spaces`);
         return;
       }
-      const n = Math.round(Number(f.get('count'))), rent = Number(f.get('rent'));
-      const word = p.kind === 'shops' ? 'Shop' : 'House';
-      if (!(n >= 1 && n <= 60)) return toast(`Enter how many ${p.kind === 'shops' ? 'shops' : 'flats or houses'}, from 1 to 60`);
-      if (!(rent > 0)) return toast('Enter the rent for each one');
-      const svc = Number(f.get('service')) || 0;
-      const what = p.kind === 'shops' ? (n === 1 ? 'shop' : 'shops') : n === 1 ? 'flat or house' : 'flats or houses';
-      if (!review(`<strong>${n} ${what}</strong> (${word} 1${n > 1 ? ` to ${word} ${n}` : ''})<br>${money(rent)} a month each${svc ? ` + ${money(svc)} service charge` : ''}<div class="small muted mt-s">You can rename them and change any rent afterwards.</div>`)) return;
-      state.properties.push(p);
-      for (let i = 1; i <= n; i++) {
-        state.units.push({ id: LH.uid('U'), propertyId: p.id, label: `${word} ${i}`, rent, service: Number(f.get('service')) || 0, serviceName: 'Service charge', period: 'month' });
+      names.forEach((nm, i) => {
+        const room = { id: LH.uid('rm'), propertyId: p.id, name: nm };
+        state.rooms.push(room);
+        addSpaces(room, p, spaces[i], rents[i], service, 1);
+      });
+      log(`Added ${names.length} room${names.length === 1 ? '' : 's'} (${total} spaces) to ${p.name}`);
+      save(); closeSheet(); render(); toast(`${names.length} room${names.length === 1 ? '' : 's'} added. Tap a space to add a tenant.`);
+    },
+    editRoom: (f) => {
+      const room = (state.rooms || []).find((r) => r.id === f.get('id')); if (!room) return;
+      const p = byId(state.properties, room.propertyId), us = unitsIn(room);
+      const name = String(f.get('name') || '').trim(), want = Math.round(Number(f.get('spaces'))), rent = Math.round(Number(f.get('rent')));
+      const taken = us.filter((u) => tenantIn(u)).length;
+      if (!name) return toast('Give the room a name');
+      if (name !== room.name && roomsOf(p.id).some((r) => r.name === name)) return toast(`There is already a room called ${name}`);
+      if (!(want >= 1 && want <= 20)) return toast('A room takes 1 to 20 people');
+      if (want < taken) return toast(`${taken} people live here, so it needs at least ${taken} spaces`);
+      if (!(rent > 0)) return toast('Enter the rent per space');
+      const from = f.get('from') || iso(T());
+      room.name = name;
+      us.forEach((u) => { const onDay = LH.rateAt(u, from); if (onDay.rent !== rent) LH.setRate(u, from, rent, onDay.service); });
+      if (want > us.length) addSpaces(room, p, want - us.length, rent, (us[0] && rateNow(us[0]).service) || 0, us.length + 1);
+      else if (want < us.length) {
+        // Remove empty spaces only, the last ones first; a space someone once rented is kept for their history.
+        const used = new Set((state.tenancies || []).map((tn) => tn.unitId));
+        const drop = us.filter((u) => !tenantIn(u) && !used.has(u.id)).reverse().slice(0, us.length - want).map((u) => u.id);
+        if (drop.length < us.length - want) return toast('Some empty spaces were rented before, so they are kept for their history');
+        state.units = state.units.filter((u) => !drop.includes(u.id));
       }
-      log(`Added ${p.name} with ${n} ${word.toLowerCase()}${n === 1 ? '' : 's'}`);
-      save(); closeSheet(); go('property/' + p.id); toast(`${p.name} added`);
+      relabel(room, p);
+      log(`Updated ${room.name} at ${p.name}`);
+      save(); closeSheet(); render(); toast('Room saved');
     },
     readSms: (f) => smsResults(LH.parseMoneySms(f.get('sms'))),
     // A message from an unknown number: record it for the chosen tenant and remember the number.
@@ -3192,6 +3394,14 @@ We never sell your data or use it for adverts.</div>
 
   /* ---------- Live inputs ---------- */
   const inputs = {
+    roomCount: (el) => { roomRows(el.closest('form')); },
+    roomSpaces: (el) => { const r = el.closest('.room-row'); if (r) r.dataset.touched = '1'; },
+    whoMoves: (el) => {
+      const form = el.closest('form'), back = form.querySelector('[name=who]:checked').value === 'returning';
+      form.querySelector('#new-person').hidden = back;
+      form.querySelectorAll('#new-person input').forEach((x) => { x.disabled = back; });
+      const rf = form.querySelector('#returning-field'); rf.hidden = !back; form.returning.disabled = !back;
+    },
     rentPreview: (el) => {
       const form = el.closest('form'); if (!form || form.dataset.form !== 'editProperty') return;
       const f = new FormData(form), mode = f.get('mode') || 'keep';
@@ -3219,9 +3429,6 @@ We never sell your data or use it for adverts.</div>
     // Add property: show the fields for the kind chosen.
     propKind: (el) => {
       const form = el.closest('form'), kind = form.querySelector('[name=kind]:checked').value, boarding = kind === 'boarding';
-      form.querySelector('#flats-fields').hidden = boarding; form.querySelector('#boarding-fields').hidden = !boarding;
-      form.querySelector('#count-label').textContent = kind === 'shops' ? 'How many shops?' : 'How many flats or houses?';
-      form.querySelector('#service-help').textContent = kind === 'shops' ? 'For example security, cleaning or a share of ZESCO.' : 'For example LWSC water, ZESCO share or security.';
       form.name.placeholder = kind === 'shops' ? 'e.g. Cairo Road Shops' : kind === 'boarding' ? 'e.g. Mutende Student Lodge' : 'e.g. Chelstone Flats';
     },
     // Number of houses changed: add or remove rows, keeping what was already typed.
@@ -3231,7 +3438,25 @@ We never sell your data or use it for adverts.</div>
       const keep = [...list.querySelectorAll('.house-row')].map((r) => ({ name: r.querySelector('[name=houseName]').value, beds: r.querySelector('[name=houseBeds]').value }));
       list.innerHTML = houseRows(n, keep);
       inputs.houseBeds(el);
+      if (!form.sameBedRent.checked) houseRentRows(form);
     },
+    // "Same rent for all of them": one rent box, or one row per flat, house or shop.
+    sameRent: (el) => {
+      const form = el.closest('form'), same = el.checked;
+      form.querySelector('#rent-each').hidden = !same;
+      form.querySelector('#unit-rents-field').hidden = same;
+      if (!same) unitRentRows(form);
+      form.querySelectorAll('#unit-rents input').forEach((x) => { x.disabled = same; });
+    },
+    unitCount: (el) => { const form = el.closest('form'); if (form.sameRent && !form.sameRent.checked && el.name === 'count') unitRentRows(form); },
+    sameBedRent: (el) => {
+      const form = el.closest('form'), same = el.checked;
+      form.querySelector('#bed-rent-each').hidden = !same;
+      form.querySelector('#house-rents-field').hidden = same;
+      if (!same) houseRentRows(form);
+      form.querySelectorAll('#house-rents input').forEach((x) => { x.disabled = same; });
+    },
+    houseRentsSync: (el) => { const form = el.closest('form'); if (form.sameBedRent && !form.sameBedRent.checked && el.name === 'houseName') houseRentRows(form); },
     houseBeds: (el) => {
       const form = el.closest('form');
       form.querySelector('#house-total').innerHTML = houseTotal([...form.querySelectorAll('[name=houseBeds]')].map((b) => b.value));

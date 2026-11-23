@@ -6,7 +6,7 @@ rules_version = '2';
 // Layout (see docs/DATABASE.md):
 //   landlords/{landlordId}                 landlordId = the landlord's sign-in account id (uid)
 //     members/{phone}                      +260… → { phone, role: tenant|caretaker, refId, propertyId?, unitId?, propertyIds? }
-//     properties/{id}  units/{id}  tenants/{id}  caretakers/{id}
+//     properties/{id}  rooms/{id}  units/{id}  tenants/{id}  tenancies/{id}  caretakers/{id}
 //     payments/{id}  notices/{id}  requests/{id}  messages/{id}  activity/{id}  deductions/{id}
 //     private/settings                     reminders and other landlord-only settings
 //     counters/receipts                    { next } for receipt numbers
@@ -58,6 +58,21 @@ service cloud.firestore {
         allow read: if isLandlord(lid) || caretakerHas(lid, pid)
           || (isTenant(lid) && member(lid).propertyId == pid);
         allow write: if isLandlord(lid);
+      }
+
+      // Rooms group a property's spaces (units). Tenants don't need them; caretakers see their properties'.
+      match /rooms/{rid} {
+        allow read: if isLandlord(lid) || caretakerHas(lid, resource.data.propertyId);
+        allow write: if isLandlord(lid);
+      }
+
+      // A tenancy: one person in one space, from move-in to move-out. Payments are tied to it.
+      match /tenancies/{tnid} {
+        allow read: if isLandlord(lid)
+          || caretakerHas(lid, resource.data.propertyId)
+          || (isTenant(lid) && resource.data.tenantId == member(lid).refId);
+        allow write: if isLandlord(lid) && noSecrets(request.resource.data);
+        allow delete: if isLandlord(lid);
       }
 
       match /units/{uid} {

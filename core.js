@@ -76,6 +76,7 @@
         const n = term ? 1 : every; // a term's rent is already per term
         const r = LH.rateAt(u, first); // the rent in force when this period starts
         out.push({
+          start: first, months: term ? 4 : every,
           due: LH.dueOn(y, m, t.dueDay),
           rent: r.rent * n,
           service: r.service * n,
@@ -132,12 +133,157 @@
     return new Date(d.getFullYear(), d.getMonth(), Math.min(Math.max(1, Number(day) || 1), last));
   };
 
+  /* ---------- Tenancies ----------
+     A tenant (the person) can have several tenancies over time: one per space they rented, from the
+     day they moved in to the day they left. Rent is charged per tenancy, using that space's rent at
+     the time, so moving rooms or leaving and coming back never changes what was charged before.
+     A tenancy has:
+       moveIn / moveOut       when the person lived there (moveOut empty while they still do)
+       chargeFrom / chargeTo  which rent periods it pays for (default: moveIn / moveOut). A move takes
+                              effect at the next rent period, so the old one is charged to the end of
+                              the current period and the new one from the start of the next.
+       space                  a copy of the space's name and rent, so old history survives even if the
+                              space or property is later deleted. */
+  LH.tenanciesOf = (state, t) => (state.tenancies || []).filter((x) => x.tenantId === t.id)
+    .sort((a, b) => (a.moveIn < b.moveIn ? -1 : a.moveIn > b.moveIn ? 1 : 0));
+  // The space a tenancy is for: the live one if it still exists, otherwise its saved copy.
+  LH.spaceOf = (state, tn) => (state.units || []).find((u) => u.id === tn.unitId) || tn.space || null;
+  LH.spaceCopy = (u) => (u ? { label: u.label, rent: u.rent, service: u.service || 0, serviceName: u.serviceName || '', period: u.period, rates: (u.rates || []).slice(), propertyId: u.propertyId } : null);
+  // Every rent period the person has been charged for, across all their tenancies, oldest first.
+  LH.tenantPeriods = function (state, t, today) {
+    const tns = LH.tenanciesOf(state, t);
+    if (!tns.length) { const u = (state.units || []).find((x) => x.id === t.unitId); return u ? LH.periods(t, u, today) : []; }
+    const out = [];
+    tns.forEach((tn) => {
+      const u = LH.spaceOf(state, tn); if (!u) return;
+      const from = tn.chargeFrom || tn.moveIn, to = tn.chargeTo || tn.moveOut || null;
+      if (to && to < from) return; // moved on before it was ever charged
+      LH.periods({ since: from, ended: to, dueDay: tn.dueDay, every: tn.every }, u, today)
+        .forEach((p) => { p.tenancyId = tn.id; p.space = u.label; out.push(p); });
+    });
+    return out;
+  };
+  // The tenancy a person has now (or had last), and its space.
+  LH.currentTenancy = (state, t) => { const tns = LH.tenanciesOf(state, t); return tns.find((x) => !x.moveOut) || tns[tns.length - 1] || null; };
+  // Where the next rent period starts for a tenancy (used when someone moves): { next, lastDay }.
+  LH.nextPeriodStart = function (state, tn, today) {
+    const u = LH.spaceOf(state, tn);
+    const ps = LH.periods({ since: tn.chargeFrom || tn.moveIn, ended: null, dueDay: tn.dueDay, every: tn.every }, u, today);
+    const cur = ps[ps.length - 1];
+    if (!cur) { const d = LH.parse(tn.chargeFrom || tn.moveIn); return { next: d, lastDay: LH.addDays(d, -1) }; }
+    const next = new Date(cur.start.getFullYear(), cur.start.getMonth() + cur.months, 1);
+    return { next, lastDay: LH.addDays(next, -1) };
+  };
+
+  /* ---------- Starting, moving and ending tenancies ----------
+     The person record keeps a copy of their current tenancy (space, move-in date, due day, deposit,
+     and "ended" when they have no current home) so screens can show it quickly. */
+  LH.mirrorTenancy = function (state, t) {
+    const tn = LH.currentTenancy(state, t); if (!tn) return;
+    t.tenancyId = tn.id; t.unitId = tn.unitId; t.since = tn.moveIn;
+    t.dueDay = tn.dueDay; t.every = tn.every; t.deposit = tn.deposit;
+    t.ended = tn.moveOut || null;
+    if (!t.ended) delete t.ended;
+  };
+  // A new tenancy in a space, from a move-in day. plan: { dueDay, every, deposit, chargeFrom }
+  LH.startTenancy = function (state, t, unitId, moveIn, plan) {
+    const u = (state.units || []).find((x) => x.id === unitId); if (!u) return null;
+    state.tenancies = state.tenancies || [];
+    const tn = { id: LH.uid('tn'), tenantId: t.id, name: t.name, phone: t.phone, propertyId: u.propertyId, roomId: u.roomId || '', unitId, spaceNo: u.spaceNo || 1,
+      moveIn, moveOut: null, dueDay: plan.dueDay, every: u.period === 'term' ? 1 : (plan.every || 1), deposit: plan.deposit || 0, space: LH.spaceCopy(u) };
+    // Someone coming back soon after leaving is never charged twice for a period they already paid
+    // for: the new tenancy starts at the first period not yet charged.
+    let from = plan.chargeFrom || moveIn;
+    const before = LH.tenanciesOf(state, t).filter((x) => x.moveOut);
+    if (before.length) {
+      let paidTo = null;
+      before.forEach((x) => {
+        const sp = LH.spaceOf(state, x); if (!sp) return;
+        const end = LH.parse(x.chargeTo || x.moveOut);
+        LH.periods({ since: x.chargeFrom || x.moveIn, ended: x.chargeTo || x.moveOut, dueDay: x.dueDay, every: x.every }, sp, LH.addDays(end, 1))
+          .forEach((p) => { const next = new Date(p.start.getFullYear(), p.start.getMonth() + p.months, 1); if (!paidTo || next > paidTo) paidTo = next; });
+      });
+      if (paidTo && LH.parse(from) < paidTo) {
+        let d = paidTo;
+        if (u.period === 'term') d = new Date(d.getFullYear(), d.getMonth() + ((4 - (d.getMonth() % 4)) % 4), 1);
+        from = LH.iso(d);
+      }
+    }
+    if (from !== moveIn) tn.chargeFrom = from;
+    state.tenancies.push(tn);
+    LH.mirrorTenancy(state, t);
+    return tn;
+  };
+  // Leaving: the current period is still charged, as it always was.
+  LH.endTenancy = function (state, t, day) {
+    const tn = LH.currentTenancy(state, t); if (!tn || tn.moveOut) return null;
+    tn.moveOut = day; tn.space = LH.spaceCopy(LH.spaceOf(state, tn)) || tn.space;
+    LH.mirrorTenancy(state, t);
+    return tn;
+  };
+  // Moving to another space: the new space is theirs straight away; rent switches at the next period.
+  LH.moveTenancy = function (state, t, unitId, today) {
+    const old = LH.currentTenancy(state, t); if (!old || old.moveOut || old.unitId === unitId) return null;
+    const u = (state.units || []).find((x) => x.id === unitId); if (!u) return null;
+    const np = LH.nextPeriodStart(state, old, today);
+    let from = np.next;
+    // Bed spaces are charged per term: start at the first term that begins on or after that day.
+    if (u.period === 'term') { from = new Date(from.getFullYear(), from.getMonth() + ((4 - (from.getMonth() % 4)) % 4), 1); }
+    old.moveOut = LH.iso(today); old.chargeTo = LH.iso(LH.addDays(from, -1)); old.space = LH.spaceCopy(LH.spaceOf(state, old)) || old.space;
+    return LH.startTenancy(state, t, unitId, LH.iso(today), { dueDay: old.dueDay, every: old.every, deposit: old.deposit, chargeFrom: LH.iso(from) });
+  };
+
+  /* Brings older records up to date: rooms (spaces grouped into rooms; a flat or shop is a room with
+     one space), one tenancy per tenant, and each payment linked to its tenancy. Safe to run again. */
+  LH.migrate = function (state) {
+    let changed = false;
+    state.rooms = state.rooms || [];
+    state.tenancies = state.tenancies || [];
+    const props = {}; (state.properties || []).forEach((p) => { props[p.id] = p; });
+    const houseOf = (u) => u.house || (u.label.includes(' · ') ? u.label.split(' · ')[0] : u.label);
+    // Rooms
+    (state.units || []).forEach((u) => {
+      if (u.roomId && state.rooms.some((r) => r.id === u.roomId)) return;
+      const shared = (props[u.propertyId] || {}).kind === 'boarding';
+      const name = shared ? houseOf(u) : u.label;
+      let room = shared && state.rooms.find((r) => r.propertyId === u.propertyId && r.name === name);
+      if (!room) { room = { id: LH.uid('rm'), propertyId: u.propertyId, name }; state.rooms.push(room); }
+      u.roomId = room.id; changed = true;
+    });
+    // Space numbers within each room, in list order.
+    const seen = {};
+    (state.units || []).forEach((u) => {
+      seen[u.roomId] = (seen[u.roomId] || 0) + 1;
+      if (u.spaceNo !== seen[u.roomId]) { u.spaceNo = seen[u.roomId]; changed = true; }
+    });
+    // Tenancies
+    (state.tenants || []).forEach((t) => {
+      if (t.tenancyId && state.tenancies.some((x) => x.id === t.tenancyId)) return;
+      if (state.tenancies.some((x) => x.tenantId === t.id)) { t.tenancyId = LH.currentTenancy(state, t).id; changed = true; return; }
+      const u = (state.units || []).find((x) => x.id === t.unitId);
+      const tn = { id: LH.uid('tn'), tenantId: t.id, name: t.name, phone: t.phone, propertyId: u ? u.propertyId : '', roomId: u ? u.roomId : '', unitId: t.unitId, spaceNo: u ? u.spaceNo : 1,
+        moveIn: t.since, moveOut: t.ended || null, dueDay: t.dueDay, every: t.every || 1, deposit: t.deposit || 0, space: LH.spaceCopy(u) };
+      state.tenancies.push(tn); t.tenancyId = tn.id; changed = true;
+    });
+    // Payments belong to the tenancy they were paid during (or the person's latest one).
+    (state.payments || []).forEach((p) => {
+      if (p.tenancyId && state.tenancies.some((x) => x.id === p.tenancyId)) return;
+      const tns = state.tenancies.filter((x) => x.tenantId === p.tenantId).sort((a, b) => (a.moveIn < b.moveIn ? -1 : 1));
+      if (!tns.length) return;
+      const during = tns.filter((x) => x.moveIn <= p.date).pop() || tns[0];
+      p.tenancyId = during.id; changed = true;
+    });
+    return changed;
+  };
+
   LH.account = function (state, t, today) {
-    const u = state.units.find((x) => x.id === t.unitId);
-    const step = LH.every(t, u);
+    const ctn = LH.currentTenancy(state, t);
+    const u = (ctn && LH.spaceOf(state, ctn)) || state.units.find((x) => x.id === t.unitId);
+    const plan = ctn || t; // due day and how often they pay come from the current tenancy
+    const step = LH.every(plan, u);
     const now = LH.rateAt(u, today);
     const per = (now.rent + now.service) * (u.period === 'term' ? 1 : step);
-    const ps = LH.periods(t, u, today);
+    const ps = LH.tenantPeriods(state, t, today);
     const pays = state.payments
       .filter((p) => p.tenantId === t.id && p.status === 'confirmed')
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -153,13 +299,13 @@
     const cur = ps[ps.length - 1];
     const res = { unit: u, periods: ps, payments: pays, charged, paid, balance, per, current: cur, daysLate: 0, aheadUntil: null };
 
-    if (!cur) { res.status = 'paid'; res.dueDate = LH.dueOn(LH.parse(t.since).getFullYear(), LH.parse(t.since).getMonth(), t.dueDay); return res; }
+    if (!cur) { const from = LH.parse((ctn && (ctn.chargeFrom || ctn.moveIn)) || t.since); res.status = 'paid'; res.dueDate = LH.dueOn(from.getFullYear(), from.getMonth(), plan.dueDay); return res; }
 
     if (balance <= 0) {
       res.status = 'paid';
       const extra = Math.floor(-balance / per + 0.0001);
       const base = cur.due;
-      res.dueDate = LH.dueOn(base.getFullYear(), base.getMonth() + step * (extra + 1), t.dueDay);
+      res.dueDate = LH.dueOn(base.getFullYear(), base.getMonth() + step * (extra + 1), plan.dueDay);
       if (extra >= 1) {
         const until = new Date(base.getFullYear(), base.getMonth() + step * extra + (u.period === 'term' ? 0 : step - 1), 1);
         res.aheadUntil = u.period === 'term' ? LH.termLabel(until) : LH.monthLabel(until);
@@ -369,6 +515,7 @@
       note: 'Sent to your 096 number. Balance next week.',
     });
     state.deductions = LH.seedDeductions(state, today);
+    LH.migrate(state); // rooms and tenancies for the sample data
     return state;
   };
 
@@ -406,8 +553,9 @@
      day or two to show. Only payments the landlord recorded or confirmed count. */
   LH.REF_GRACE_DAYS = 3;
   LH.rentRecord = function (state, t, today) {
-    const u = state.units.find((x) => x.id === t.unitId);
-    const due = LH.periods(t, u, today).filter((p) => p.due <= today);
+    const ctn = LH.currentTenancy(state, t);
+    const u = (ctn && LH.spaceOf(state, ctn)) || state.units.find((x) => x.id === t.unitId);
+    const due = LH.tenantPeriods(state, t, today).filter((p) => p.due <= today);
     const pays = state.payments.filter((p) => p.tenantId === t.id && p.status === 'confirmed')
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     let i = 0, left = 0, lastDate = null;
@@ -428,7 +576,7 @@
     });
     let streak = 0, best = 0;
     periods.forEach((p) => { streak = p.onTime ? streak + 1 : 0; best = Math.max(best, streak); });
-    const word = u.period === 'term' ? 'term' : LH.every(t, u) === 1 ? 'month' : 'payment';
+    const word = u.period === 'term' ? 'term' : LH.every(ctn || t, u) === 1 ? 'month' : 'payment';
     return {
       periods, word,
       total: periods.length,
@@ -438,7 +586,7 @@
       bestStreak: best,
       currentStreak: streak,
       totalPaid: pays.reduce((s, p) => s + p.amount, 0),
-      since: LH.parse(t.since),
+      since: LH.parse(((LH.tenanciesOf(state, t)[0] || {}).moveIn) || t.since),
     };
   };
   // A short code to quote when checking a reference, e.g. "R-7KQ2MD". The same tenant on the same
