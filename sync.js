@@ -65,8 +65,27 @@
       list.forEach(function (x) { if (typeof x._o !== 'number') x._o = ++max; });
     });
   }
-  // Messages a tenant wrote can only be sent from the tenant's own phone (Phase 4), so they stay local.
-  var syncs = function (c, item) { return !(c === 'messages' && item.from === 'tenant'); };
+  // A message a tenant wrote is created from the tenant's own phone. Once it is online, the
+  // landlord's devices may only mark it as read; one written on this device stays here.
+  var syncs = function (c, item) { return !(c === 'messages' && item.from === 'tenant') || (('messages/' + item.id) in shadow); };
+
+  /* Who may sign in to this landlord's records: one entry per phone number (Phase 4).
+     The rules use it to show a tenant only their home, and a caretaker only their properties. */
+  function membersFor(st) {
+    var unitProp = {}, out = {};
+    (st.units || []).forEach(function (u) { unitProp[u.id] = u.propertyId; });
+    (st.tenants || []).forEach(function (t) {
+      var ph = intl(t.phone);
+      if (t.ended || ph.length !== 13 || out[ph]) return;
+      out[ph] = { phone: ph, role: 'tenant', refId: t.id, propertyId: unitProp[t.unitId] || '', unitId: t.unitId };
+    });
+    (st.caretakers || []).forEach(function (c) {
+      var ph = intl(c.phone);
+      if (ph.length !== 13 || out[ph]) return;
+      out[ph] = { phone: ph, role: 'caretaker', refId: c.id, propertyIds: (c.propertyIds || []).slice() };
+    });
+    return out;
+  }
 
   function landlordDoc(st, phone) {
     var L = st.landlord || {};
@@ -83,6 +102,8 @@
     out[''] = landlordDoc(st, phone);
     out['private/settings'] = settingsDoc(st);
     COLS.forEach(function (c) { (st[c] || []).forEach(function (x) { if (x && x.id && syncs(c, x)) out[c + '/' + x.id] = clean(x); }); });
+    var mem = membersFor(st);
+    Object.keys(mem).forEach(function (ph) { out['members/' + ph] = mem[ph]; });
     return out;
   }
   var refFor = function (path) { return path ? base(uid).collection(path.split('/')[0]).doc(path.split('/')[1]) : base(uid); };
@@ -135,9 +156,10 @@
      (not just the device's offline copy) confirms they are gone, so opening with no signal
      never empties the device. */
   var firstSeen = {}, serverSeen = {}, ready = false, orphans = {};
-  var NEEDED = COLS.concat(['', 'private/settings']);
+  var NEEDED = COLS.concat(['', 'private/settings', 'members']);
 
   api.push = function () {
+    if (member) return memberPush();
     if (!uid || !hooks || !ready) return;
     var st = hooks.get(), want = wanted(st), ops = [];
     Object.keys(want).forEach(function (path) {
@@ -158,8 +180,9 @@
     var list = st[c] = st[c] || [];
     var at = list.findIndex(function (x) { return x.id === d.id; });
     if (change.type === 'removed') {
+      var drop = at >= 0 && syncs(c, list[at]);
       delete shadow[path]; delete orphans[path];
-      if (at >= 0 && syncs(c, list[at])) { list.splice(at, 1); return true; }
+      if (drop) { list.splice(at, 1); return true; }
       return false;
     }
     var data = d.data(), s = stable(data);
@@ -180,7 +203,7 @@
     // online yet is held back until the server confirms whether it was deleted elsewhere.
     ready = true;
     var want = wanted(hooks.get());
-    Object.keys(want).forEach(function (path) { if (!(path in shadow)) orphans[path] = true; });
+    Object.keys(want).forEach(function (path) { if (!(path in shadow) && path.indexOf('members/') !== 0) orphans[path] = true; });
     api.push();
   }
   function serverConfirms(c, snap) {
@@ -209,6 +232,14 @@
         setStatus(snap.metadata.fromCache ? (navigator.onLine === false ? 'offline' : 'connecting') : (snap.metadata.hasPendingWrites ? 'sending' : 'online'));
       }, function (e) { console.warn('Landlord Hub sync:', e); setStatus('error'); }));
     });
+    // The members list only needs to be known (what's online), not shown.
+    unsubs.push(b.collection('members').onSnapshot(function (snap) {
+      snap.docChanges().forEach(function (ch) {
+        var path = 'members/' + ch.doc.id;
+        if (ch.type === 'removed') delete shadow[path]; else shadow[path] = stable(ch.doc.data());
+      });
+      arrived('members');
+    }, function (e) { console.warn('Landlord Hub sync:', e); setStatus('error'); }));
     unsubs.push(b.onSnapshot(function (d) {
       if (d.exists) {
         var data = d.data(), s = stable(data);
@@ -239,13 +270,152 @@
     }, function (e) { console.warn('Landlord Hub sync:', e); setStatus('error'); }));
     window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
   };
-  function onNet() { if (uid) setStatus(navigator.onLine ? 'connecting' : 'offline'); }
+  function onNet() { if (uid || member) setStatus(navigator.onLine ? 'connecting' : 'offline'); }
 
   api.stop = function () {
     unsubs.forEach(function (f) { try { f(); } catch (e) {} });
-    unsubs = []; uid = null; hooks = null; shadow = {}; ready = false; orphans = {};
+    unsubs = []; uid = null; hooks = null; shadow = {}; ready = false; orphans = {}; member = null; memberData = {};
     window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet);
     api.status = 'off';
+  };
+
+  /* ---------- Tenants and caretakers (Phase 4) ----------
+     A tenant or caretaker signs in with their own number. Their landlord's app lists that number
+     under members/, so they can find the landlord and read only their share: a tenant their home,
+     rent, receipts, notices, repairs and messages; a caretaker their properties. They can only
+     write what the rules allow, so only those changes are sent. */
+  api.findMemberships = function (phone) {
+    return db.collectionGroup('members').where('phone', '==', intl(phone)).get().then(function (snap) {
+      return snap.docs.map(function (d) { var m = d.data(); m.lid = d.ref.parent.parent.id; return m; });
+    });
+  };
+  // Every place a member's share comes from: [list name, document or query].
+  function memberSources(m) {
+    var b = base(m.lid), q = [['landlord', b]], N = b.collection('notices');
+    if (m.role === 'tenant') {
+      q.push(['tenants', b.collection('tenants').doc(m.refId)]);
+      q.push(['units', b.collection('units').doc(m.unitId)]);
+      q.push(['properties', b.collection('properties').doc(m.propertyId)]);
+      ['payments', 'requests', 'messages'].forEach(function (c) { q.push([c, b.collection(c).where('tenantId', '==', m.refId)]); });
+      ['all', m.propertyId, m.refId].forEach(function (a) { q.push(['notices', N.where('audience', '==', a)]); });
+      q.push(['notices', N.where('audience', 'array-contains', m.refId)]);
+    } else {
+      q.push(['caretakers', b.collection('caretakers').doc(m.refId)]);
+      q.push(['notices', N.where('audience', '==', 'all')]);
+      (m.propertyIds || []).forEach(function (pid) {
+        q.push(['properties', b.collection('properties').doc(pid)]);
+        ['units', 'tenants', 'payments', 'requests'].forEach(function (c) { q.push([c, b.collection(c).where('propertyId', '==', pid)]); });
+        q.push(['notices', N.where('audience', '==', pid)]);
+      });
+    }
+    return q;
+  }
+  var isDoc = function (ref) { return typeof ref.collection === 'function' && typeof ref.where !== 'function'; };
+  function emptyShare() { var st = { version: 1, landlord: { id: 'L1', name: '', phone: '' }, reminders: {}, remindedAt: {}, receiptSeq: 0 }; COLS.forEach(function (c) { st[c] = []; }); return st; }
+  function putLandlord(st, data) { st.landlord = { id: 'L1', name: data.name || '', phone: local(data.phone), business: data.business || '', email: data.email || '', payout: data.payout || '' }; }
+  function upsert(list, data) {
+    var at = list.findIndex(function (x) { return x.id === data.id; });
+    if (at >= 0) { list[at] = data; return; }
+    var pos = list.findIndex(function (x) { return (x._o || 0) > (data._o || 0); });
+    if (pos < 0) list.push(data); else list.splice(pos, 0, data);
+  }
+
+  // Everything a member may see, read once (to open the app on their phone).
+  api.downloadMember = function (m) {
+    var src = memberSources(m), st = emptyShare();
+    return Promise.all(src.map(function (s) { return s[1].get(); })).then(function (res) {
+      res.forEach(function (r, i) {
+        var col = src[i][0];
+        if (col === 'landlord') { if (r.exists) putLandlord(st, r.data()); return; }
+        if (isDoc(src[i][1])) { if (r.exists) upsert(st[col], r.data()); return; }
+        r.docs.forEach(function (d) { upsert(st[col], d.data()); });
+      });
+      return st;
+    });
+  };
+
+  var member = null, memberData = {};
+  var MAY_CREATE = {
+    tenant: { payments: function (x, m) { return x.tenantId === m.refId && x.status === 'pending' && x.by === 'tenant'; },
+      requests: function (x, m) { return x.tenantId === m.refId && x.status === 'open'; },
+      messages: function (x) { return x.from === 'tenant'; }, activity: function () { return true; } },
+    caretaker: { payments: function (x) { return x.by === 'caretaker' && x.method === 'Cash' && x.status === 'confirmed'; },
+      activity: function () { return true; } },
+  };
+  var MAY_CHANGE = { tenant: { messages: ['read'] }, caretaker: { requests: ['status', 'updatedAt', 'updatedBy'] } };
+
+  function memberPush() {
+    if (!member || !hooks || !ready) return;
+    var st = hooks.get(), m = member, b = base(m.lid), ops = [], myPhone = intl(m.phone);
+    var tenantProp = {};
+    (st.tenants || []).forEach(function (t) { tenantProp[t.id] = t.propertyId; });
+    Object.keys(MAY_CREATE[m.role]).concat(Object.keys(MAY_CHANGE[m.role])).forEach(function (c) {
+      (st[c] || []).forEach(function (x) {
+        if (!x || !x.id) return;
+        var path = c + '/' + x.id;
+        if (!(path in shadow)) {
+          var ok = MAY_CREATE[m.role][c];
+          if (!ok || !ok(x, m)) return;
+          // What the rules expect on a new record from a member.
+          if (c === 'payments' || c === 'requests') x.propertyId = m.role === 'tenant' ? m.propertyId : (tenantProp[x.tenantId] || x.propertyId || '');
+          if (c === 'messages') { x.propertyId = m.propertyId; x.tenantId = m.refId; x.read = false; }
+          if (c === 'activity') x.byPhone = myPhone;
+          if (typeof x._o !== 'number') x._o = Date.now();
+          var data = clean(x);
+          ops.push(b.collection(c).doc(x.id).set.bind(b.collection(c).doc(x.id), data));
+          shadow[path] = stable(data); memberData[path] = data;
+          return;
+        }
+        // An existing record: send only the fields this person may change (e.g. "read").
+        var allowed = (MAY_CHANGE[m.role] || {})[c] || [], old = memberData[path] || {}, upd = {}, any = false;
+        allowed.forEach(function (k) { if (stable(x[k]) !== stable(old[k]) && x[k] !== undefined) { upd[k] = x[k]; any = true; } });
+        if (!any) return;
+        var merged = Object.assign({}, old, upd);
+        ops.push(b.collection(c).doc(x.id).update.bind(b.collection(c).doc(x.id), upd));
+        shadow[path] = stable(merged); memberData[path] = merged;
+      });
+    });
+    ops.forEach(function (op) { op().catch(function (e) { console.warn('Landlord Hub sync:', e); setStatus('error'); }); });
+  }
+
+  api.startMember = function (m, h) {
+    api.stop();
+    member = m; hooks = h; shadow = {}; memberData = {}; ready = false;
+    setStatus('connecting');
+    var src = memberSources(m), pending = src.length;
+    var settled = function () { if (--pending === 0) { ready = true; memberPush(); } };
+    src.forEach(function (s) {
+      var col = s[0], ref = s[1], first = true;
+      var done = function () { if (first) { first = false; settled(); } };
+      var fail = function (e) { console.warn('Landlord Hub sync:', e); setStatus('error'); done(); };
+      if (col === 'landlord') {
+        unsubs.push(ref.onSnapshot(function (d) { if (d.exists) { putLandlord(hooks.get(), d.data()); hooks.changed(); } done(); }, fail));
+      } else if (isDoc(ref)) {
+        unsubs.push(ref.onSnapshot(function (d) {
+          var st = hooks.get(), list = st[col] = st[col] || [], path = col + '/' + d.id;
+          if (d.exists) { var data = d.data(); if (shadow[path] !== stable(data)) { shadow[path] = stable(data); memberData[path] = data; upsert(list, data); hooks.changed(); } }
+          else { var at = list.findIndex(function (x) { return x.id === d.id; }); if (at >= 0) { list.splice(at, 1); delete shadow[path]; hooks.changed(); } }
+          done();
+        }, fail));
+      } else {
+        unsubs.push(ref.onSnapshot({ includeMetadataChanges: true }, function (snap) {
+          var st = hooks.get(), list = st[col] = st[col] || [], changed = false;
+          snap.docChanges().forEach(function (ch) {
+            var d = ch.doc, path = col + '/' + d.id, at = list.findIndex(function (x) { return x.id === d.id; });
+            if (ch.type === 'removed') { if (at >= 0) { list.splice(at, 1); changed = true; } delete shadow[path]; delete memberData[path]; return; }
+            var data = d.data(), sd = stable(data);
+            memberData[path] = data;
+            if (shadow[path] === sd && at >= 0) return;
+            shadow[path] = sd;
+            if (at < 0 || stable(list[at]) !== sd) { upsert(list, data); changed = true; }
+          });
+          if (changed) hooks.changed();
+          setStatus(snap.metadata.fromCache ? (navigator.onLine === false ? 'offline' : 'connecting') : (snap.metadata.hasPendingWrites ? 'sending' : 'online'));
+          done();
+        }, fail));
+      }
+    });
+    window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
   };
 
   // Logging out: remove Firebase's offline copy of the records from this device (they stay online).

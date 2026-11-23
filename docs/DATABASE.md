@@ -76,7 +76,31 @@ A person who isn't signed in, or is signed in but isn't the landlord or one of t
 1. Sign in with a phone number (Firebase phone sign-in, Zambian numbers only).
 2. **Landlord:** their records are at `landlords/{their uid}`.
 3. **Tenant or caretaker:** the app asks for `members` documents whose `phone` is their own number
-   (a collection-group query). Each one tells it which landlord, and which tenancy or properties.
+   (a collection-group query, which needs the index in [`firestore.indexes.json`](../firestore.indexes.json)).
+   Each one tells it which landlord, and which tenancy or properties. With more than one (a tenant of two
+   landlords, or a landlord who is also someone's tenant), they choose which records to open.
+4. If the number isn't on any landlord's list, they're treated as a landlord with their own records.
+
+## Tenants and caretakers on their own phones (Phase 4)
+
+- **Who may sign in** is published by the landlord's app as `members/{+260…}`, worked out from their
+  tenants and caretakers every time it syncs. Ending a tenancy or removing a caretaker removes the entry,
+  so that number loses access.
+- **What a tenant's phone reads:** the landlord's profile, their own tenant record, home (unit and
+  property), their payments, repairs and messages, and notices for everyone, their property, or them
+  (alone or in a list).
+- **What a caretaker's phone reads:** the landlord's profile, their caretaker record, and for each
+  property they look after: the property, its units, tenants, payments, repairs and notices.
+- **What they send:** a tenant reports payments (waiting for the landlord to confirm), repairs and
+  messages, and marks the landlord's messages read. A caretaker records **cash** payments with their own
+  receipt series (their initials, e.g. `LH-2026-EMQH-0001`) and changes a repair's status from their **Repairs** tab. Both add activity entries under their
+  own number. Nothing else is sent, and the rules would refuse it anyway.
+- **Paying from the tenant app:** until the MTN MoMo / Airtel Money payment systems are connected, "Pay"
+  shows the landlord's number and the \*303# / \*778# steps; the landlord's Android app records the
+  payment from the MoMo message.
+- **Invites:** once the landlord's records are online, the invite is a plain link to the app with
+  "sign in with your number". The older invite links still work for a landlord who isn't syncing.
+- **Logging out** removes the share and Firebase's offline copy from the tenant's or caretaker's phone.
 
 ## How syncing works (Phase 3, `sync.js`)
 
@@ -91,7 +115,7 @@ A person who isn't signed in, or is signed in but isn't the landlord or one of t
   removed from the device once Firebase's server (not just the offline copy) confirms it is gone.
 - **Logging out** removes the records and Firebase's offline copy from the device; they stay online.
 - Every record gets `_o` (its place in the list) so lists come back in the same order on every device.
-- Messages a tenant wrote stay on the phone they were written on until tenants have accounts (Phase 4).
+- A message a tenant wrote is created from the tenant's own phone; the landlord's devices can only mark it read.
 - The demo never syncs.
 
 ## Still to settle
@@ -102,5 +126,5 @@ A person who isn't signed in, or is signed in but isn't the landlord or one of t
 - **Rent references:** a reference is worked out from the landlord's own payment records, so a tenant can't type
   it in. Today a future landlord checks it by calling the landlord named on it and quoting its code (`R-…`).
   Once records are online, a read-only `references/{code}` record could let them check it by link instead.
-- **One phone, several landlords:** a tenant who rents from two landlords has two `members` records.
-  The app needs a "choose landlord" step for that case.
+- **Tenants on several phones:** members are found by the tenant's main phone number only; the extra
+  lines a landlord saves for MoMo matching don't give sign-in access.

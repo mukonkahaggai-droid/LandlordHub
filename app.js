@@ -44,7 +44,8 @@
   let syncStatus = 'off';
   // Syncing runs only for a landlord signed in online on this device, who switched it on.
   const syncAllowed = () => !!(window.LHSync && window.LHSync.ready && session && session.uid && session.role === 'landlord');
-  const syncOn = () => syncAllowed() && cloudPref().uid === session.uid && window.LHSync.status !== 'off';
+  const memberOn = () => !!(window.LHSync && window.LHSync.ready && session && session.member && window.LHSync.status !== 'off');
+  const syncOn = () => memberOn() || (syncAllowed() && cloudPref().uid === session.uid && window.LHSync.status !== 'off');
   let renderSoon = null;
   // A change arrived from another device: keep it on this device and redraw the screen
   // (after the person finishes typing, so a box they're filling in isn't wiped).
@@ -219,7 +220,7 @@
   const NAV = {
     landlord: [['home', 'Home', 'home'], ['tenants', 'Tenants', 'users'], ['properties', 'Properties', 'building'], ['notices', 'Notices', 'notice'], ['more', 'More', 'more']],
     tenant: [['home', 'Home', 'home'], ['receipts', 'Receipts', 'receipt'], ['notices', 'Notices', 'notice'], ['requests', 'Repairs', 'tool'], ['account', 'Account', 'user']],
-    caretaker: [['home', 'Home', 'home'], ['tenants', 'Tenants', 'users'], ['activity', 'Activity', 'clock'], ['account', 'Account', 'user']],
+    caretaker: [['home', 'Home', 'home'], ['tenants', 'Tenants', 'users'], ['requests', 'Repairs', 'tool'], ['activity', 'Activity', 'clock'], ['account', 'Account', 'user']],
   };
   const route = () => (location.hash.replace(/^#\/?/, '') || 'home').split('/');
   const go = (p) => { location.hash = '#/' + p; };
@@ -326,6 +327,10 @@
     if (a === 'join' && b) { app.innerHTML = joinView(b); lastRoute = location.hash; return; }
     if (a === 'j' && b) { app.innerHTML = shortJoinView(b.toUpperCase()); lastRoute = location.hash; return; }
     if (!session) { app.innerHTML = loginView(); return; }
+    if (session.member && !me()) {
+      app.innerHTML = `<div class="auth"><div class="auth-box"><div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div><h1>Nothing to show yet</h1><p class="lede">${session.role === 'tenant' ? "Your landlord's records don't list you as a tenant at the moment." : "You're not a caretaker for any property at the moment."} If that's wrong, ask your landlord to check your phone number.</p><button class="btn block mt" data-action="logout">Log out</button></div></div>`;
+      return;
+    }
     const views = { landlord: L, tenant: TN, caretaker: C }[session.role];
     const view = views[a] || views.home;
     const active = NAV[session.role].some((n) => n[0] === a) ? a : ({ tenant: 'tenants', property: 'properties', collections: 'home', payments: 'home', reports: 'more', requests: 'more', caretakers: 'more', reminders: 'more', activity: session.role === 'landlord' ? 'more' : 'activity', privacy: 'more', messages: 'more', reference: session.role === 'landlord' ? 'tenants' : 'home' }[a] || 'home');
@@ -983,7 +988,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
 
   function demoControls() {
     // Real records online: no demo switching or resetting, which would overwrite them.
-    if (session && session.uid && cloudPref().uid === session.uid) {
+    if (session && session.uid && (session.member || cloudPref().uid === session.uid)) {
       return `<section class="section"><div class="list"><button class="row" data-action="logout"><span class="tile neutral">${icon('logout')}</span><div class="grow"><div class="title">Log out</div><div class="meta">Your records stay online. Sign in again with your number to see them.</div></div></button></div></section>`;
     }
     return `<section class="section"><div class="section-head"><h2>Demo</h2></div><div class="list">
@@ -1285,6 +1290,15 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       <div class="small faint mt" style="padding:0 2px">Tap a tenant to record a cash payment.</div>`;
   };
   C.activity = function () { return L.activity(); };
+  // Repairs at the caretaker's properties: tap one to mark it in progress or done.
+  C.requests = function () {
+    const order = { open: 0, progress: 1, done: 2 };
+    const mine = new Set(careTenants().map((t) => t.id));
+    const props = new Set(myCare().propertyIds);
+    const list = state.requests.filter((r) => mine.has(r.tenantId) || props.has(r.propertyId)).sort((a, b) => order[a.status] - order[b.status] || (a.date < b.date ? 1 : -1));
+    return `${head('Repairs', { sub: 'At the properties you look after. Tap one to update it.' })}
+      <div class="list">${list.map(requestRow).join('') || '<div class="empty">No repairs reported.</div>'}</div>`;
+  };
   C.account = function () { return privacyView('') + textSizeCard() + demoControls(); };
 
   /* =====================================================================
@@ -1516,8 +1530,20 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   }
 
   function addPayment(p) {
-    state.receiptSeq++;
-    p.receipt = `LH-${p.date.slice(0, 4)}-${String(state.receiptSeq).padStart(4, '0')}`;
+    if (session && session.member && session.role === 'caretaker') {
+      // A caretaker's receipts have their own series (e.g. LH-2026-C1-0007), so they never clash
+      // with the landlord's numbers.
+      let n = 0; try { n = Number(localStorage.getItem('landlordhub.careSeq.' + session.id)) || 0; } catch (e) {}
+      const tag0 = (initials(me().name) + String(session.id).slice(-2)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      n = Math.max(n, ...state.payments.filter((x) => x.by === 'caretaker' && String(x.receipt || '').includes(`-${tag0}-`)).map((x) => Number(String(x.receipt).split('-').pop()) || 0)) + 1;
+      try { localStorage.setItem('landlordhub.careSeq.' + session.id, String(n)); } catch (e) {}
+      // Short and readable: the caretaker's initials plus two letters of their id, e.g. LH-2026-EMQH-0001.
+      const tag = (initials(me().name) + String(session.id).slice(-2)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      p.receipt = `LH-${p.date.slice(0, 4)}-${tag}-${String(n).padStart(4, '0')}`;
+    } else {
+      state.receiptSeq++;
+      p.receipt = `LH-${p.date.slice(0, 4)}-${String(state.receiptSeq).padStart(4, '0')}`;
+    }
     p.id = p.id || LH.uid('p');
     p.at = Date.now();
     state.payments.push(p);
@@ -1904,11 +1930,14 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     } catch (e) { return null; }
   }
   // The message: a greeting, a blank line, then the link on a line of its own so it can be tapped.
-  const inviteMessage = (t, link) => `Hello ${first(t.name)},\n\nThis is ${state.landlord.name}. I now use Landlord Hub to keep track of rent and receipts.\n\nPlease tap the link below to join me as the tenant of ${unitOf(t).label}, ${propOf(unitOf(t)).name}:\n\n${link}\n\nThank you.`;
+  const inviteMessage = (t, link) => /invited=1/.test(link)
+    ? `Hello ${first(t.name)},\n\nThis is ${state.landlord.name}. I now use Landlord Hub to keep track of rent and receipts.\n\nTap the link below and sign in with your number, ${LH.prettyPhone(t.phone)}, to see your rent, receipts and notices for ${unitOf(t).label}, ${propOf(unitOf(t)).name}:\n\n${link}\n\nThank you.`
+    : `Hello ${first(t.name)},\n\nThis is ${state.landlord.name}. I now use Landlord Hub to keep track of rent and receipts.\n\nPlease tap the link below to join me as the tenant of ${unitOf(t).label}, ${propOf(unitOf(t)).name}:\n\n${link}\n\nThank you.`;
   async function inviteSheet(id, justAdded) {
     const t = byId(state.tenants, id); if (!t) return;
     openSheet(`${sheetHead(justAdded ? `${first(t.name)} has been added` : 'Invite to the app')}<div class="empty">${icon('link')}<div class="mt-s">Making ${esc(first(t.name))}'s link…</div></div>`);
-    const link = (await shortInviteLink(t)) || longInviteLink(t);
+    const online = syncOn() && session.role === 'landlord';
+    const link = online ? `${location.origin}${location.pathname}?invited=1` : (await shortInviteLink(t)) || longInviteLink(t);
     if (!sheetRoot.classList.contains('open')) return; // closed while waiting
     const msg = inviteMessage(t, link);
     setSheet(`${sheetHead(justAdded ? `${first(t.name)} has been added` : 'Invite to the app')}
@@ -2223,6 +2252,24 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   /* Tenant pay flow: detect network → send prompt → approve on phone → confirmed */
   function paySheet() {
     const t = myTenant(), a = acct(t);
+    if (session.member) {
+      // Paying inside the app needs the MTN MoMo / Airtel Money payment systems (not connected yet),
+      // so a tenant pays the usual way; the landlord's Android app records it from the MoMo message.
+      const L0 = state.landlord, to = L0.payout || L0.phone, amt0 = a.balance > 0 ? a.balance : a.per;
+      return openSheet(`${sheetHead('Pay rent')}
+        <div class="card pad" style="background:var(--surface-2)">
+          <div class="small muted">Send</div><div style="font:680 28px/1.2 var(--font-display)" class="num">${money(amt0)}</div>
+          <div class="small muted mt-s">to ${esc(L0.business || L0.name)}</div><div style="font-weight:650;font-size:18px" class="num">${LH.prettyPhone(to)}</div>
+          ${LH.network(to) ? `<span class="net ${LH.network(to)}" style="margin-top:6px;display:inline-block">${LH.wallet(LH.network(to))}</span>` : ''}
+        </div>
+        <ol class="prose small mt" style="padding-left:20px;margin-bottom:0">
+          <li>Dial <strong>*303#</strong> for MTN MoMo or <strong>*778#</strong> for Airtel Money.</li>
+          <li>Choose Send Money and send it to <strong class="num">${LH.prettyPhone(to)}</strong>.</li>
+          <li>Pay from <strong class="num">${LH.prettyPhone(t.phone)}</strong> so it's matched to you. Your receipt appears here once ${esc(first(L0.name))} has it.</li>
+        </ol>
+        <button class="btn primary block lg mt" data-action="manualPay">I've paid: tell ${esc(first(L0.name))}</button>
+        <p class="small faint mt">Part payments are fine. Anything extra is taken off your next rent.</p>`);
+    }
     const net = LH.network(t.phone);
     const amt = a.balance > 0 ? a.balance : a.per;
     if (net === 'Zamtel' || !net) return manualPaySheet(amt);
@@ -2315,8 +2362,10 @@ We never sell your data or use it for adverts.</div>
         </form></div></div>`;
     }
     return `<div class="auth"><div class="auth-box">${brand}
-      <h1>Rent, sorted.</h1>
-      <p class="lede">Track every house, tenant and kwacha. Tenants pay with MTN MoMo or Airtel Money and get a receipt straight away.</p>
+      ${/[?&]invited=1/.test(location.search)
+        ? `<h1>Welcome</h1><p class="lede">Your landlord has added you to Landlord Hub. Sign in with the phone number they have for you to see your rent, receipts and notices.</p>`
+        : `<h1>Rent, sorted.</h1>
+      <p class="lede">Track every house, tenant and kwacha. Tenants pay with MTN MoMo or Airtel Money and get a receipt straight away.</p>`}
       <form data-form="phone">
         <label class="field"><span class="label">Your phone number</span><div class="input-group"><span class="prefix">+260</span><input class="input" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="96 123 4567" value="${esc(s.phone ? LH.cleanPhone(s.phone).slice(1) : '')}"></div></label>
         <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? 'Sending your code…' : 'Send me a code'}</button>
@@ -2530,6 +2579,16 @@ We never sell your data or use it for adverts.</div>
       if (!d.keep) { session = null; saveSession(); ui.login = { step: 'phone', phone: '' }; }
       closeSheet(); render(); toast('Demo data reset');
     },
+    pickMembership: (d) => {
+      const { uid, ph } = window.__lhPick || {};
+      if (!uid) return;
+      if (d.i === 'landlord') {
+        session = { role: 'landlord', id: 'L1', uid, phone: ph }; saveSession(); location.hash = '#/home'; render();
+        if (cloudPref().uid === uid) startSync(); else setTimeout(() => cloudSetupSheet(true), 600);
+        return;
+      }
+      openMembership(window.__lhChoices[Number(d.i)], uid, ph);
+    },
     cloudSetup: () => cloudSetupSheet(false),
     cloudUpload: async () => moveOnline(false),
     cloudStartEmpty: async () => moveOnline(true),
@@ -2559,7 +2618,7 @@ We never sell your data or use it for adverts.</div>
     cloudStopYes: () => { window.LHSync.stop(); setCloudPref(null); closeSheet(); render(); toast('Syncing stopped on this device'); },
     logout: () => {
       // Records kept online leave this device when you log out, so nobody else using it can see them.
-      if (session && session.uid && cloudPref().uid === session.uid) {
+      if (session && session.uid && (session.member || cloudPref().uid === session.uid)) {
         state = LH.seed(T()); saveLocal(); setCloudPref(null);
         session = null; saveSession();
         const done = () => { location.hash = ''; location.reload(); };
@@ -2666,6 +2725,8 @@ We never sell your data or use it for adverts.</div>
   }
 
   function finishLogin() {
+    // Signed in online: a tenant or caretaker is found from their landlord's list (Phase 4).
+    if (ui.login.uid && window.LHSync && window.LHSync.ready) return finishOnlineLogin();
     const ph = LH.cleanPhone(ui.login.phone);
     const t = state.tenants.find((x) => x.phone === ph && !x.ended);
     const c = state.caretakers.find((x) => x.phone === ph);
@@ -2677,6 +2738,59 @@ We never sell your data or use it for adverts.</div>
       if (cloudPref().uid === session.uid) startSync();
       else setTimeout(() => cloudSetupSheet(true), 600);
     }
+  }
+
+  /* Signed in with a phone number: is this a landlord, or a tenant or caretaker of one or more
+     landlords? Their landlord's app lists their number; with more than one, they choose. */
+  async function finishOnlineLogin() {
+    const uid = ui.login.uid, ph = LH.cleanPhone(ui.login.phone);
+    ui.login = { ...ui.login, busy: true, step: 'pin' };
+    app.innerHTML = `<div class="auth"><div class="auth-box"><div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div><h1>One moment</h1><p class="lede">Finding your records…</p></div></div>`;
+    let found = [];
+    try { found = await window.LHSync.findMemberships(ph); }
+    catch (e) { console.warn(e); ui.login = { step: 'phone', phone: ph }; render(); return toast(navigator.onLine === false ? 'You need internet to sign in. Connect and try again.' : "Couldn't check your account just now. Try again in a minute."); }
+    ui.login = { step: 'phone', phone: '' };
+    if (!found.length) {
+      session = { role: 'landlord', id: 'L1', uid, phone: ph };
+      saveSession(); location.hash = '#/home'; render();
+      toast('Signed in');
+      if (cloudPref().uid === uid) startSync(); else setTimeout(() => cloudSetupSheet(true), 600);
+      return;
+    }
+    if (found.length === 1) return openMembership(found[0], uid, ph);
+    // More than one: choose which landlord's records to open (or their own, as a landlord).
+    window.__lhChoices = found;
+    app.innerHTML = `<div class="auth"><div class="auth-box"><div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div>
+      <h1>Which one?</h1><p class="lede">Your number is with more than one landlord.</p>
+      <div class="list">${found.map((m, i) => `<button class="row" data-action="pickMembership" data-i="${i}"><span class="tile">${icon(m.role === 'tenant' ? 'user' : 'key')}</span><div class="grow"><div class="title">${m.role === 'tenant' ? 'As a tenant' : 'As a caretaker'}</div><div class="meta" id="lname-${i}">Loading the landlord's name…</div></div>${icon('chev', 'chev')}</button>`).join('')}
+        <button class="row" data-action="pickMembership" data-i="landlord"><span class="tile">${icon('building')}</span><div class="grow"><div class="title">My own properties</div><div class="meta">As a landlord</div></div>${icon('chev', 'chev')}</button></div></div></div>`;
+    window.__lhPick = { uid, ph };
+    found.forEach((m, i) => window.LHCloud.app.firestore().collection('landlords').doc(m.lid).get().then((d) => { const el = document.getElementById('lname-' + i); if (el && d.exists) el.textContent = `${d.data().business || d.data().name}`; }).catch(() => {}));
+  }
+  // Open a tenant's or caretaker's share of their landlord's records on this device.
+  async function openMembership(m, uid, ph) {
+    app.innerHTML = `<div class="auth"><div class="auth-box"><div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div><h1>One moment</h1><p class="lede">Getting your ${m.role === 'tenant' ? 'rent and receipts' : 'properties'}…</p></div></div>`;
+    try {
+      const share = await window.LHSync.downloadMember({ ...m, phone: ph });
+      if (m.role === 'tenant' && !share.tenants.length) throw new Error('no tenancy');
+      state = share; saveLocal();
+      session = { role: m.role, id: m.refId, uid, phone: ph, member: m };
+      saveSession(); location.hash = '#/home'; render();
+      startMemberSync();
+      toast(`Signed in as ${first(me().name)}`);
+    } catch (e) {
+      console.warn(e);
+      session = null; saveSession(); render();
+      toast("Couldn't open your records. Check your internet and try again.");
+    }
+  }
+  function startMemberSync() {
+    if (!(window.LHSync && window.LHSync.ready && session && session.member)) return;
+    window.LHSync.startMember({ ...session.member, phone: session.phone }, {
+      get: () => state,
+      changed: onRemoteChange,
+      status: (st) => { syncStatus = st; const el = document.getElementById('sync-status'); if (el) el.outerHTML = syncStatusHTML(); },
+    });
   }
 
   /* The first time on a device: copy its records online, start with none, or load the records
@@ -2806,6 +2920,7 @@ We never sell your data or use it for adverts.</div>
       const amount = Math.round(Number(f.get('amount')) * 100) / 100;
       if (!t || !(amount > 0)) return toast('Choose a tenant and an amount');
       const isCare = session.role === 'caretaker';
+      if (isCare && session.member && (f.get('method') || 'Cash') !== 'Cash') return toast('Caretakers record cash payments only');
       const p = addPayment({ tenantId: t.id, amount, date: f.get('date') || iso(T()), method: f.get('method') || 'Cash', ref: (f.get('ref') || '').trim(), by: isCare ? 'caretaker' : 'landlord', byName: me().name, status: 'confirmed' });
       paidSheet(p, isCare ? `Receipt sent to ${first(t.name)} and ${first(state.landlord.name)}` : `${t.name} · ${p.method} · receipt sent`);
     },
@@ -3222,7 +3337,9 @@ We never sell your data or use it for adverts.</div>
   render();
 
   // Records online: carry on syncing if this device was syncing when it was last open.
-  if (window.LHCloud && window.LHCloud.ready && session && session.uid && cloudPref().uid === session.uid) {
+  if (window.LHCloud && window.LHCloud.ready && session && session.uid && session.member) {
+    window.LHCloud.whenReady().then((u) => { if (u && u.uid === session.uid) startMemberSync(); });
+  } else if (window.LHCloud && window.LHCloud.ready && session && session.uid && cloudPref().uid === session.uid) {
     window.LHCloud.whenReady().then((u) => { if (u && u.uid === session.uid) startSync(); });
   }
 

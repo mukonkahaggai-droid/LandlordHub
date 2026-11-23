@@ -287,6 +287,51 @@ test("a landlord can read and answer every tenant; caretakers and strangers can'
   await assertFails(as.otherLandlord().collection(`${L}/messages`).get());
 });
 
+/* ---------- Phase 4: the exact reads a tenant's and caretaker's phone make (sync.js memberSources) ---------- */
+test("a tenant's phone can read every part of its share the way sync.js asks for it", async () => {
+  const db = as.tenant1(), b = db.doc(L);
+  await assertSucceeds(b.get());
+  await assertSucceeds(b.collection('tenants').doc('T1').get());
+  await assertSucceeds(b.collection('units').doc('U1').get());
+  await assertSucceeds(b.collection('properties').doc('P1').get());
+  for (const c of ['payments', 'requests', 'messages']) await assertSucceeds(b.collection(c).where('tenantId', '==', 'T1').get());
+  for (const a of ['all', 'P1', 'T1']) await assertSucceeds(b.collection('notices').where('audience', '==', a).get());
+  await assertSucceeds(b.collection('notices').where('audience', 'array-contains', 'T1').get());
+});
+
+test("a caretaker's phone can read every part of its share the way sync.js asks for it", async () => {
+  const db = as.caretaker(), b = db.doc(L);
+  await assertSucceeds(b.get());
+  await assertSucceeds(b.collection('caretakers').doc('C1').get());
+  await assertSucceeds(b.collection('notices').where('audience', '==', 'all').get());
+  await assertSucceeds(b.collection('properties').doc('P1').get());
+  for (const c of ['units', 'tenants', 'payments', 'requests']) await assertSucceeds(b.collection(c).where('propertyId', '==', 'P1').get());
+  await assertSucceeds(b.collection('notices').where('audience', '==', 'P1').get());
+  // …and nothing for a property they don't look after.
+  for (const c of ['units', 'tenants', 'payments', 'requests']) await assertFails(b.collection(c).where('propertyId', '==', 'P3').get());
+});
+
+test('what a tenant and a caretaker send from their own phones is accepted', async () => {
+  const t = as.tenant1().doc(L), c = as.caretaker().doc(L);
+  // Tenant: reports a payment, a repair, a message; marks the landlord's message read; logs it.
+  await assertSucceeds(t.collection('payments').doc('tp1').set({ id: 'tp1', tenantId: 'T1', propertyId: 'P1', amount: 2500, date: '2026-11-23', method: 'Airtel Money', ref: 'CI123', by: 'tenant', byName: 'Chanda Mulenga', status: 'pending', proof: '', note: '', at: 1, _o: 1 }));
+  await assertSucceeds(t.collection('requests').doc('tr1').set({ id: 'tr1', tenantId: 'T1', propertyId: 'P1', category: 'Plumbing', text: 'Leak', status: 'open', date: '2026-11-23', _o: 1 }));
+  await assertSucceeds(t.collection('messages').doc('tm1').set({ id: 'tm1', tenantId: 'T1', propertyId: 'P1', from: 'tenant', about: 'rent', promise: '2026-11-27', text: "I'll pay Friday", date: '2026-11-23', at: 1, read: false, _o: 1 }));
+  await assertSucceeds(t.collection('messages').doc('M3').update({ read: true }));
+  await assertSucceeds(t.collection('activity').doc('ta1').set({ id: 'ta1', date: '2026-11-23', who: 'Chanda Mulenga', text: 'Reported a payment', byPhone: PH.tenant1, at: 1, _o: 1 }));
+  // Caretaker: records cash with their own receipt series; moves a repair along.
+  await assertSucceeds(c.collection('payments').doc('cp1').set({ id: 'cp1', tenantId: 'T2', propertyId: 'P1', amount: 500, date: '2026-11-23', method: 'Cash', ref: '', by: 'caretaker', byName: 'Esther Mumba', status: 'confirmed', receipt: 'LH-2026-C1-0001', at: 1, _o: 1 }));
+  await assertSucceeds(c.collection('requests').doc('R1').update({ status: 'progress' }));
+});
+
+test('the landlord publishes who may sign in; nobody else can', async () => {
+  await assertSucceeds(as.landlord().doc(`${L}/members/+260960000472`).set({ phone: '+260960000472', role: 'tenant', refId: 'T2', propertyId: 'P1', unitId: 'U2' }));
+  await assertFails(as.landlord().doc(`${L}/members/+260960000472`).set({ phone: '+260999999999', role: 'tenant', refId: 'T2', propertyId: 'P1', unitId: 'U2' }));
+  await assertFails(as.landlord().doc(`${L}/members/+260960000473`).set({ phone: '+260960000473', role: 'landlord', refId: 'L1' }));
+  await assertSucceeds(as.landlord().doc(`${L}/members/${PH.tenant2}`).delete());
+  await assertFails(as.otherLandlord().doc(`${L}/members/+260960000474`).set({ phone: '+260960000474', role: 'tenant', refId: 'T1', propertyId: 'P1', unitId: 'U1' }));
+});
+
 /* ---------- Everything else ---------- */
 test('collections that are not in the rules are closed', async () => {
   await assertFails(as.landlord().doc('anything/else').set({ x: 1 }));

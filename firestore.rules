@@ -107,8 +107,10 @@ service cloud.firestore {
       match /notices/{nid} {
         // A notice goes to 'all', one property, one tenant, or a list of tenants.
         allow read: if isLandlord(lid)
+          // (Written so Firebase can check a search for "notices sent to me in a list" too:
+          // for a single-word audience the first test decides; the second only matters for lists.)
           || (isTenant(lid) && (resource.data.audience in ['all', member(lid).propertyId, member(lid).refId]
-              || (resource.data.audience is list && member(lid).refId in resource.data.audience)))
+              || member(lid).refId in resource.data.audience))
           || (isCaretaker(lid) && (resource.data.audience == 'all' || resource.data.audience in member(lid).propertyIds));
         allow write: if isLandlord(lid);
       }
