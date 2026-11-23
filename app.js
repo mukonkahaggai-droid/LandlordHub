@@ -1892,7 +1892,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const pre = t ? t.unitId : unitId;
     let sel = pre; // the exact space that was tapped
     const due = t ? t.dueDay || 1 : 1;
-    const every = t ? Math.max(1, Number(t.every) || 1) : 1;
+    const every = t ? Math.max(1, Number(t.every) || 1) : Math.max(1, Number((unitById(unitId || '') || {}).every) || 1);
     if (!sel && units.length) sel = units[0].value;
     openSheet(`${sheetHead(editing ? `Edit ${first(t.name)}'s details` : 'Add a tenant')}
       <form data-form="${editing ? 'editTenant' : 'addTenant'}" autocomplete="off">
@@ -2104,8 +2104,8 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         </div><div class="help">Choose this first: the questions change to match.</div></div>
         <label class="field"><span class="label">Property name</span><input class="input" name="name" required placeholder="e.g. Chelstone Flats"></label>
         <label class="field"><span class="label">Location</span><input class="input" name="area" required placeholder="e.g. Chelstone, Lusaka"></label>
-        <button class="btn primary block lg" type="submit">Save and add rooms</button>
-        <p class="small faint mt">Next you'll say how many rooms it has and how many people each room takes.</p>
+        <button class="btn primary block lg" type="submit" id="prop-next">Save and add flats or houses</button>
+        <p class="small faint mt" id="prop-next-help">Next you'll say how many flats or houses it has, their rent and how often tenants pay.</p>
       </form>`);
   }
 
@@ -2114,21 +2114,27 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   function roomsSheet(pid) {
     const p = byId(state.properties, pid); if (!p) return;
     const have = roomsOf(pid).length, term = p.kind === 'boarding';
+    // Flats and houses: one tenancy each, so no "people per room"; rent per flat and how often they pay.
+    const flats = p.kind === 'flats' || p.kind === 'house';
     const n0 = have ? 1 : p.kind === 'boarding' ? 3 : p.kind === 'shops' ? 3 : 4;
-    openSheet(`${sheetHead(have ? `Add rooms to ${esc(p.name)}` : `Rooms at ${esc(p.name)}`)}
+    openSheet(`${sheetHead(flats ? (have ? `Add flats or houses to ${esc(p.name)}` : `Flats and houses at ${esc(p.name)}`) : have ? `Add rooms to ${esc(p.name)}` : `Rooms at ${esc(p.name)}`)}
       <form data-form="addRooms" autocomplete="off"><input type="hidden" name="pid" value="${pid}">
         <div id="add-fields">
-        <label class="field"><span class="label">How many ${have ? 'more ' : ''}rooms?</span>
+        <label class="field"><span class="label">How many ${have ? 'more ' : ''}${flats ? 'flats or houses' : 'rooms'}?</span>
           <div class="due-row"><input class="input due-input num" name="rooms" type="number" inputmode="numeric" min="1" max="60" value="${n0}" data-input="roomCount"><span class="due-said">${p.kind === 'shops' ? 'shops' : p.kind === 'boarding' ? 'rooms' : 'flats or houses'}</span></div></label>
-        <label class="field"><span class="label">People (spaces) in each room</span>
+        <label class="field" ${flats ? 'hidden' : ''}><span class="label">People (spaces) in each room</span>
           <div class="due-row"><input class="input due-input num" name="spaces" type="number" inputmode="numeric" min="1" max="20" value="${term ? 2 : 1}" data-input="roomCount"><span class="due-said">${term ? 'beds per room' : 'per room (1 for a whole flat or shop)'}</span></div>
           <div class="help">You can change any single room below.</div></label>
-        <label class="field" id="rent-each"><span class="label">Rent per space, per ${term ? 'term' : 'month'}</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" value="${term ? 3500 : 3500}" data-input="roomCount"></div></label>
-        <label class="check same-rent"><input type="checkbox" name="sameRent" checked data-input="roomCount"><span><strong>Same rent for every space</strong><span class="small muted" style="display:block">Untick to set a rent for each room.</span></span></label>
-        <div class="field"><span class="label">Each room</span>
-          <div class="room-head"><span>Name</span><span>Spaces</span><span class="room-rent-col">Rent</span></div>
+        <label class="field" id="rent-each"><span class="label">${flats ? 'Rent per flat or house, per month' : `Rent per space, per ${term ? 'term' : 'month'}`}</span><div class="input-group"><span class="prefix">K</span><input class="input" name="rent" type="number" min="1" value="3500" data-input="roomCount"></div></label>
+        ${flats ? `<div class="field"><label class="label" for="room-every">How often do they pay?</label>
+          <div class="due-row"><span class="due-pre">Every</span><input class="input due-input num" id="room-every" name="every" type="number" inputmode="numeric" min="1" max="12" value="1" data-input="roomEvery"><span class="due-said" id="room-every-said">month</span></div>
+          <div class="chips mt-s" aria-label="Common choices">${[[1, 'Every month'], [2, '2 months'], [3, '3 months'], [6, '6 months'], [12, 'Once a year']].map(([v, l]) => `<button type="button" class="chip${v === 1 ? ' active' : ''}" data-action="roomEveryPick" data-v="${v}">${l}</button>`).join('')}</div>
+          <div class="help">Tenants you add here start with this. You can change it for any tenant.</div></div>` : ''}
+        <label class="check same-rent"><input type="checkbox" name="sameRent" checked data-input="roomCount"><span><strong>${flats ? 'Same rent for every flat or house' : 'Same rent for every space'}</strong><span class="small muted" style="display:block">Untick to set a rent for each ${flats ? 'one' : 'room'}.</span></span></label>
+        <div class="field"><span class="label">${flats ? 'Each flat or house' : 'Each room'}</span>
+          <div class="room-head${flats ? ' no-spaces' : ''}"><span>Name</span><span>Spaces</span><span class="room-rent-col">Rent</span></div>
           <div class="unit-rent-list" id="room-rows"></div></div>
-        <label class="field"><span class="label">Service charge per space <span class="faint" style="font-weight:400">(optional)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="service" type="number" min="0" value="0"></div><div class="help">For example LWSC water, ZESCO share or security.</div></label>
+        <label class="field"><span class="label">Service charge per ${flats ? 'flat or house, per month' : 'space'} <span class="faint" style="font-weight:400">(optional)</span></span><div class="input-group"><span class="prefix">K</span><input class="input" name="service" type="number" min="0" value="0"></div><div class="help">For example LWSC water, ZESCO share or security.</div></label>
         ${term ? '<div class="help" style="margin:-6px 0 14px">Terms start in January, May and September.</div>' : ''}
         </div>
         <div id="add-review" class="add-review" hidden></div>
@@ -2142,6 +2148,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const p = byId(state.properties, form.pid.value), have = roomsOf(p.id).length;
     const n = Math.min(60, Math.max(0, Math.round(Number(form.rooms.value) || 0)));
     const same = form.sameRent.checked;
+    const flats = p.kind === 'flats' || p.kind === 'house';
     const keep = [...form.querySelectorAll('#room-rows .room-row')].map((r) => ({ name: r.querySelector('[name=roomName]').value, spaces: r.querySelector('[name=roomSpaces]').value, rent: r.querySelector('[name=roomRent]').value, touched: r.dataset.touched === '1' }));
     let out = '';
     for (let i = 0; i < n; i++) {
@@ -2150,7 +2157,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       const spaces = k.touched ? k.spaces : form.spaces.value;
       out += `<div class="room-row" data-touched="${k.touched ? 1 : 0}"><span class="house-no num">${have + i + 1}</span>
         <label class="grow"><span class="sr">Name of room ${i + 1}</span><input class="input" name="roomName" value="${esc(name)}" required></label>
-        <label class="room-spaces"><span class="sr">Spaces in room ${i + 1}</span><input class="input num" name="roomSpaces" type="number" inputmode="numeric" min="1" max="20" value="${esc(spaces || 1)}" required data-input="roomSpaces"></label>
+        <label class="room-spaces"${flats ? ' hidden' : ''}><span class="sr">Spaces in room ${i + 1}</span><input class="input num" name="roomSpaces" type="number" inputmode="numeric" min="1" max="20" value="${esc(flats ? 1 : spaces || 1)}" required data-input="roomSpaces"></label>
         <label class="room-rent-col"${same ? ' hidden' : ''}><span class="sr">Rent per space in room ${i + 1}</span><div class="input-group"><span class="prefix">K</span><input class="input num" name="roomRent" type="number" inputmode="decimal" min="1" value="${esc(k.rent || form.rent.value || '')}" ${same ? 'disabled' : ''} required></div></label></div>`;
     }
     form.querySelector('#room-rows').innerHTML = out;
@@ -2563,6 +2570,9 @@ We never sell your data or use it for adverts.</div>
     },
     editProperty: (d) => editPropertySheet(d.id),
     addRooms: (d) => roomsSheet(d.id),
+    roomEveryPick: (d, el) => {
+      const form = el.closest('form'); form.every.value = d.v; inputs.roomEvery(form.every);
+    },
     editRoom: (d) => editRoomSheet(d.id),
     deleteRoom: (d) => {
       const room = (state.rooms || []).find((r) => r.id === d.id); if (!room) return;
@@ -3219,7 +3229,10 @@ We never sell your data or use it for adverts.</div>
       const same = !!f.get('sameRent'), rent = Math.round(Number(f.get('rent')));
       const rents = same ? names.map(() => rent) : f.getAll('roomRent').map((x) => Math.round(Number(x)));
       const service = Math.round(Number(f.get('service')) || 0), term = p.kind === 'boarding';
-      if (!names.length) return toast('Enter how many rooms');
+      const flats = p.kind === 'flats' || p.kind === 'house';
+      const every = flats ? Math.round(Number(f.get('every')) || 1) : 1;
+      if (flats && !(every >= 1 && every <= 12)) return toast('Choose how often they pay: every 1 to 12 months');
+      if (!names.length) return toast(flats ? 'Enter how many flats or houses' : 'Enter how many rooms');
       if (names.some((x) => !x)) return toast('Give every room a name');
       if (spaces.some((x) => !(x >= 1 && x <= 20))) return toast('Each room takes 1 to 20 people');
       if (rents.some((x) => !(x > 0))) return toast(same ? 'Enter the rent per space' : 'Enter a rent for every room');
@@ -3230,7 +3243,11 @@ We never sell your data or use it for adverts.</div>
         form.dataset.step = 'review';
         form.querySelector('#add-fields').hidden = true;
         const box = form.querySelector('#add-review');
-        box.innerHTML = `<div class="r-cap">Check before adding</div><div class="add-review-name">${esc(p.name)}</div>
+        const howOftenText = every === 1 ? 'Paid every month' : every === 12 ? 'Paid once a year' : `Paid every ${every} months`;
+        box.innerHTML = flats
+          ? `<div class="r-cap">Check before adding</div><div class="add-review-name">${esc(p.name)}</div>
+          <div class="add-review-sum"><strong>${names.length} ${names.length === 1 ? 'flat or house' : 'flats or houses'}</strong><br>${names.slice(0, 8).map((x, i) => `${esc(x)}: ${money(rents[i])} a month`).join('<br>')}${names.length > 8 ? `<br>and ${names.length - 8} more` : ''}${service ? `<br>+ ${money(service)} service charge a month` : ''}<br>${howOftenText}</div>`
+          : `<div class="r-cap">Check before adding</div><div class="add-review-name">${esc(p.name)}</div>
           <div class="add-review-sum"><strong>${names.length} room${names.length === 1 ? '' : 's'}, ${total} space${total === 1 ? '' : 's'}</strong><br>${names.slice(0, 8).map((x, i) => `${esc(x)}: ${spaces[i]} ${spaces[i] === 1 ? 'space' : 'spaces'} · ${money(rents[i])} per ${term ? 'term' : 'month'}`).join('<br>')}${names.length > 8 ? `<br>and ${names.length - 8} more` : ''}${service ? `<br>+ ${money(service)} service charge per space` : ''}</div>`;
         box.hidden = false;
         form.querySelector('#add-submit').textContent = 'Yes, add them';
@@ -3241,8 +3258,15 @@ We never sell your data or use it for adverts.</div>
       names.forEach((nm, i) => {
         const room = { id: LH.uid('rm'), propertyId: p.id, name: nm };
         state.rooms.push(room);
-        addSpaces(room, p, spaces[i], rents[i], service, 1);
+        addSpaces(room, p, flats ? 1 : spaces[i], rents[i], service, 1);
+        // How often tenants of these flats pay, used as the starting choice when adding a tenant.
+        if (flats && every > 1) unitsIn(room).forEach((u) => { u.every = every; });
       });
+      if (flats) {
+        log(`Added ${names.length} ${names.length === 1 ? 'flat or house' : 'flats or houses'} to ${p.name}`);
+        save(); closeSheet(); render(); toast(`${names.length} ${names.length === 1 ? 'flat or house' : 'flats or houses'} added. Tap one to add a tenant.`);
+        return;
+      }
       log(`Added ${names.length} room${names.length === 1 ? '' : 's'} (${total} spaces) to ${p.name}`);
       save(); closeSheet(); render(); toast(`${names.length} room${names.length === 1 ? '' : 's'} added. Tap a space to add a tenant.`);
     },
@@ -3395,6 +3419,11 @@ We never sell your data or use it for adverts.</div>
   /* ---------- Live inputs ---------- */
   const inputs = {
     roomCount: (el) => { roomRows(el.closest('form')); },
+    roomEvery: (el) => {
+      const form = el.closest('form'), n = Math.round(Number(el.value));
+      form.querySelector('#room-every-said').textContent = n >= 1 && n <= 12 ? (n === 1 ? 'month' : `${n} months`) : 'Choose 1 to 12 months';
+      form.querySelectorAll('[data-action="roomEveryPick"]').forEach((c) => c.classList.toggle('active', Number(c.dataset.v) === n));
+    },
     roomSpaces: (el) => { const r = el.closest('.room-row'); if (r) r.dataset.touched = '1'; },
     whoMoves: (el) => {
       const form = el.closest('form'), back = form.querySelector('[name=who]:checked').value === 'returning';
@@ -3430,6 +3459,9 @@ We never sell your data or use it for adverts.</div>
     propKind: (el) => {
       const form = el.closest('form'), kind = form.querySelector('[name=kind]:checked').value, boarding = kind === 'boarding';
       form.name.placeholder = kind === 'shops' ? 'e.g. Cairo Road Shops' : kind === 'boarding' ? 'e.g. Mutende Student Lodge' : 'e.g. Chelstone Flats';
+      const next = form.querySelector('#prop-next'), help = form.querySelector('#prop-next-help');
+      if (next) next.textContent = kind === 'flats' ? 'Save and add flats or houses' : 'Save and add rooms';
+      if (help) help.textContent = kind === 'flats' ? "Next you'll say how many flats or houses it has, their rent and how often tenants pay." : "Next you'll say how many rooms it has and how many people each room takes.";
     },
     // Number of houses changed: add or remove rows, keeping what was already typed.
     houseCount: (el) => {

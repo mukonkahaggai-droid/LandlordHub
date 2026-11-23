@@ -920,3 +920,5 @@ body { letter-spacing: -0.005em; font-feature-settings: "tnum" 1; }
 .room-row .room-rent-col { width: 110px; flex-shrink: 0; }
 .section.room { margin-top: 14px; }
 .section.room .section-head { margin-bottom: 6px; }
+
+.room-head.no-spaces span:nth-child(2) { display: none; }
