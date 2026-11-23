@@ -145,9 +145,11 @@ A person who isn't signed in, or is signed in but isn't the landlord or one of t
 
 ## Still to settle
 
-- **Receipt numbers:** `receiptSeq` syncs and never goes backwards, but two devices recording payments while
-  both offline could give out the same number. The fix is to take numbers from `counters/receipts` in a
-  transaction when online, with a temporary number while offline.
+- **Receipt numbers (done):** each of the landlord's devices reserves a block of 20 numbers from
+  `counters/receipts` in a transaction while online and uses them offline, so two devices never give out
+  the same number (numbers may skip). A device that runs out while offline adds a short device tag
+  (`LH-2026-0125-WNK`). Caretakers use their own series. A landlord who isn't syncing keeps one running
+  number on their device.
 - **Rent references:** a reference is worked out from the landlord's own payment records, so a tenant can't type
   it in. Today a future landlord checks it by calling the landlord named on it and quoting its code (`R-…`).
   Once records are online, a read-only `references/{code}` record could let them check it by link instead.

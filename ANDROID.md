@@ -83,6 +83,25 @@ The app file appears in `android\app\build\outputs\apk\debug\app-debug.apk`. A c
 
 Every time you change the web app (`app.js`, `styles.css` …), run `npm run android:sync` again before building.
 
+## Testing sign-in and syncing on a real phone
+
+Use the test numbers in `local/firebase-test-login.txt` (they never send an SMS). Tick each one off:
+
+1. **Sign in in the Android app** with the landlord test number. Google may show a picture check: finish
+   it and tap Verify. *If the picture check never appears, spins forever or says "not allowed", note
+   exactly what it shows: that would mean the app needs the Android sign-in add-on.*
+2. **Load my online records** when asked. The same tenants as on the laptop appear.
+3. **Change something on the phone** (a tenant's name) and see it on the laptop within seconds; then
+   the other way round.
+4. **Airplane mode**, record a cash payment, switch airplane mode off: it reaches the laptop.
+5. **Receipt numbers:** record one payment on the phone and one on the laptop. They never share a
+   number (each device reserves its own block, so numbers may jump, e.g. 0126 then 0146).
+6. **Close the app fully and reopen it:** still signed in, still syncing (More → Your records online
+   says "Up to date").
+7. **Tenant and caretaker:** log out, sign in with the test tenant number, then the caretaker number;
+   each sees only their own share.
+8. **Payment pop-up** (needs a real K1 MoMo payment): see "How automatic payments work" above.
+
 ## Things to know
 
 - **Google Play:** the app no longer uses SMS permissions, which Google rarely allows. Notification access is allowed, but Google will ask you to explain in the Play Console why the app needs it ("to record rent payments from mobile money notifications"). The most reliable route later is still the MTN MoMo / Airtel Money payment APIs.

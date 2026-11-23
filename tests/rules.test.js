@@ -332,6 +332,22 @@ test('the landlord publishes who may sign in; nobody else can', async () => {
   await assertFails(as.otherLandlord().doc(`${L}/members/+260960000474`).set({ phone: '+260960000474', role: 'tenant', refId: 'T1', propertyId: 'P1', unitId: 'U1' }));
 });
 
+test("the landlord's devices reserve receipt numbers in blocks; the counter only goes up", async () => {
+  const db = as.landlord();
+  await assertSucceeds(db.doc(`${L}/counters/receipts`).update({ next: 24 }));   // a block of 20 (4 → 24)
+  await assertSucceeds(db.doc(`${L}/counters/receipts`).update({ next: 124 }));  // up to 100 at once
+  await assertFails(db.doc(`${L}/counters/receipts`).update({ next: 225 }));     // not more than 100
+  await assertFails(db.doc(`${L}/counters/receipts`).update({ next: 100 }));     // never down
+  await assertFails(db.doc(`${L}/counters/receipts`).update({ next: 124 }));     // never the same again
+  await assertFails(db.doc(`${L}/counters/receipts`).update({ next: 130, extra: 1 }));
+  await assertFails(as.tenant1().doc(`${L}/counters/receipts`).update({ next: 125 }));
+  await assertFails(as.otherLandlord().doc(`${L}/counters/receipts`).update({ next: 125 }));
+  // Starting the counter the first time.
+  await env.withSecurityRulesDisabled(async (ctx) => { await ctx.firestore().doc(`${L}/counters/receipts`).delete(); });
+  await assertFails(db.doc(`${L}/counters/receipts`).set({ next: 0 }));
+  await assertSucceeds(db.doc(`${L}/counters/receipts`).set({ next: 130 }));
+});
+
 /* ---------- Rooms and tenancies ---------- */
 test('tenancies: a tenant sees only their own, a caretaker those at their properties', async () => {
   await env.withSecurityRulesDisabled(async (ctx) => {

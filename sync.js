@@ -282,6 +282,24 @@
     api.status = 'off';
   };
 
+  /* ---------- Receipt numbers ----------
+     Each of the landlord's devices reserves a small block of receipt numbers while online (a
+     transaction on counters/receipts, so two devices can never get the same block) and uses them
+     offline. Numbers may skip between devices, but never repeat. `hint` starts the counter the
+     first time, above every receipt number already used. */
+  api.reserveReceipts = function (count, hint) {
+    if (!uid) return Promise.reject(new Error('Not syncing'));
+    var ref = base(uid).collection('counters').doc('receipts');
+    return db.runTransaction(function (tx) {
+      return tx.get(ref).then(function (d) {
+        var next = d.exists ? Number(d.data().next) || 1 : Math.max(1, Number(hint) || 1);
+        var end = next + count;
+        if (d.exists) tx.update(ref, { next: end }); else tx.set(ref, { next: end });
+        return { from: next, to: end - 1 };
+      });
+    });
+  };
+
   /* ---------- Tenants and caretakers (Phase 4) ----------
      A tenant or caretaker signs in with their own number. Their landlord's app lists that number
      under members/, so they can find the landlord and read only their share: a tenant their home,

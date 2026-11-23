@@ -67,6 +67,7 @@
   }
   function startSync() {
     if (!syncAllowed()) return;
+    setTimeout(() => topUpReceipts(), 1500);
     window.LHSync.start(session.uid, {
       get: () => state,
       changed: onRemoteChange,
@@ -1567,6 +1568,63 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     return `Clears the balance and leaves ${money(-after)} as advance rent${periods ? ` (${unitsAhead} ${word}${unitsAhead === 1 ? '' : 's'})` : ''}.`;
   }
 
+  /* ---------- Receipt numbers ----------
+     Not syncing: one running number on this device, as before. Syncing online: numbers come from
+     blocks this device reserved (see LHSync.reserveReceipts), so two of the landlord's devices
+     working offline at the same time can never give out the same number. */
+  const receiptNo = (r) => { const m = /^LH-\d{4}-(\d+)$/.exec(r || ''); return m ? Number(m[1]) : 0; };
+  const usedReceiptMax = () => Math.max(state.receiptSeq || 0, 0, ...state.payments.map((x) => receiptNo(x.receipt)));
+  const blockKey = () => 'landlordhub.receipts.' + (session && session.uid);
+  const receiptPool = () => { try { const v = JSON.parse(localStorage.getItem(blockKey())); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
+  const setReceiptPool = (v) => { try { localStorage.setItem(blockKey(), JSON.stringify(v)); } catch (e) {} };
+  const landlordSyncing = () => syncOn() && session.role === 'landlord' && !session.member && window.LHSync && window.LHSync.reserveReceipts;
+  let toppingUp = false;
+  // Keep at least 5 numbers in hand while online.
+  function topUpReceipts() {
+    if (!landlordSyncing() || toppingUp || navigator.onLine === false) return;
+    if (receiptPool().length >= 5) return;
+    toppingUp = true;
+    window.LHSync.reserveReceipts(20, usedReceiptMax() + 1)
+      .then((r) => {
+        const pool = receiptPool(), used = usedReceiptMax();
+        for (let n = r.from; n <= r.to; n++) if (n > 0 && !pool.includes(n)) pool.push(n);
+        // Never hand out a number already printed on a receipt here.
+        setReceiptPool(pool.filter((n) => !state.payments.some((x) => receiptNo(x.receipt) === n)).sort((a, b) => a - b));
+        if (used > (state.receiptSeq || 0)) state.receiptSeq = used;
+      })
+      .catch((e) => console.warn('Landlord Hub receipts:', e))
+      .finally(() => { toppingUp = false; });
+  }
+  // A short tag for this device, used only if it runs out of reserved numbers while offline.
+  function deviceTag() {
+    let t = ''; try { t = localStorage.getItem('landlordhub.deviceTag') || ''; } catch (e) {}
+    if (!/^[A-Z0-9]{3}$/.test(t)) {
+      const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; t = '';
+      for (let i = 0; i < 3; i++) t += A[Math.floor(Math.random() * A.length)];
+      try { localStorage.setItem('landlordhub.deviceTag', t); } catch (e) {}
+    }
+    return t;
+  }
+  function nextReceipt(date) {
+    const year = String(date || iso(T())).slice(0, 4);
+    if (landlordSyncing()) {
+      const pool = receiptPool();
+      const n = pool.shift();
+      if (n) {
+        setReceiptPool(pool);
+        state.receiptSeq = Math.max(state.receiptSeq || 0, n);
+        topUpReceipts();
+        return `LH-${year}-${String(n).padStart(4, '0')}`;
+      }
+      // Out of reserved numbers and offline: a number no other device can produce.
+      state.receiptSeq = (state.receiptSeq || 0) + 1;
+      topUpReceipts();
+      return `LH-${year}-${String(state.receiptSeq).padStart(4, '0')}-${deviceTag()}`;
+    }
+    state.receiptSeq = (state.receiptSeq || 0) + 1;
+    return `LH-${year}-${String(state.receiptSeq).padStart(4, '0')}`;
+  }
+
   function addPayment(p) {
     if (session && session.member && session.role === 'caretaker') {
       // A caretaker's receipts have their own series (e.g. LH-2026-C1-0007), so they never clash
@@ -1579,8 +1637,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
       const tag = (initials(me().name) + String(session.id).slice(-2)).toUpperCase().replace(/[^A-Z0-9]/g, '');
       p.receipt = `LH-${p.date.slice(0, 4)}-${tag}-${String(n).padStart(4, '0')}`;
     } else {
-      state.receiptSeq++;
-      p.receipt = `LH-${p.date.slice(0, 4)}-${String(state.receiptSeq).padStart(4, '0')}`;
+      p.receipt = nextReceipt(p.date);
     }
     p.id = p.id || LH.uid('p');
     p.at = Date.now();
@@ -2682,7 +2739,7 @@ We never sell your data or use it for adverts.</div>
     },
     confirmPending: (d) => {
       const p = byId(state.payments, d.id);
-      p.status = 'confirmed'; state.receiptSeq++; p.receipt = `LH-${p.date.slice(0, 4)}-${String(state.receiptSeq).padStart(4, '0')}`; p.at = Date.now();
+      p.status = 'confirmed'; p.receipt = nextReceipt(p.date); p.at = Date.now();
       log(`Confirmed ${money(p.amount)} from ${byId(state.tenants, p.tenantId).name}`);
       save(); openSheet(''); paidSheet(p, `${byId(state.tenants, p.tenantId).name} · receipt sent`);
     },
@@ -3594,6 +3651,7 @@ We never sell your data or use it for adverts.</div>
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sheetRoot.classList.contains('open')) closeSheet(); });
   window.addEventListener('hashchange', () => { if (sheetRoot.classList.contains('open')) closeSheet(); render(); });
   window.addEventListener('online', render);
+  window.addEventListener('online', () => setTimeout(() => topUpReceipts(), 1000));
   window.addEventListener('offline', render);
 
   load();

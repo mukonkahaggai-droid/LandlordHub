@@ -184,14 +184,16 @@ service cloud.firestore {
         allow create, update: if isLandlord(lid) && noSecrets(request.resource.data);
       }
 
-      // Receipt numbers. Landlord and caretakers take the next number inside a transaction,
-      // so two phones can never hand out the same receipt number.
+      // Receipt numbers. Each of the landlord's devices reserves a block (up to 100 at a time) inside
+      // a transaction, so two devices can never hand out the same number; the counter only goes up.
       match /counters/receipts {
         allow read: if isLandlord(lid) || isCaretaker(lid);
-        allow create: if isLandlord(lid);
-        allow update: if (isLandlord(lid) || isCaretaker(lid))
-          && request.resource.data.keys().hasOnly(['next'])
-          && request.resource.data.next == resource.data.next + 1;
+        allow create: if isLandlord(lid) && request.resource.data.keys().hasOnly(['next'])
+          && request.resource.data.next is int && request.resource.data.next > 0;
+        allow update: if request.resource.data.keys().hasOnly(['next'])
+          && ((isLandlord(lid) && request.resource.data.next > resource.data.next
+                && request.resource.data.next <= resource.data.next + 100)
+              || (isCaretaker(lid) && request.resource.data.next == resource.data.next + 1));
       }
     }
 
