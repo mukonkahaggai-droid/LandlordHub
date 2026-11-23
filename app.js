@@ -31,7 +31,45 @@
     if (!Array.isArray(state.messages)) { state.messages = LH.seedMessages(state, LH.today()); save(); }
     try { session = JSON.parse(localStorage.getItem(SKEY)); } catch (e) { session = null; }
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage full or blocked */ } }
+  function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage full or blocked */ } }
+  // Saves on this device and, when syncing is on, sends what changed online (see sync.js).
+  function save() { saveLocal(); if (syncOn()) window.LHSync.push(); }
+
+  /* ---------- Records online (Phase 3) ----------
+     A landlord signed in with their phone number can keep their records online, so all their
+     devices show the same records. The demo never syncs. */
+  const CLOUD_KEY = 'landlordhub.cloud';
+  const cloudPref = () => { try { return JSON.parse(localStorage.getItem(CLOUD_KEY)) || {}; } catch (e) { return {}; } };
+  const setCloudPref = (v) => { try { v ? localStorage.setItem(CLOUD_KEY, JSON.stringify(v)) : localStorage.removeItem(CLOUD_KEY); } catch (e) {} };
+  let syncStatus = 'off';
+  // Syncing runs only for a landlord signed in online on this device, who switched it on.
+  const syncAllowed = () => !!(window.LHSync && window.LHSync.ready && session && session.uid && session.role === 'landlord');
+  const syncOn = () => syncAllowed() && cloudPref().uid === session.uid && window.LHSync.status !== 'off';
+  let renderSoon = null;
+  // A change arrived from another device: keep it on this device and redraw the screen
+  // (after the person finishes typing, so a box they're filling in isn't wiped).
+  function onRemoteChange() {
+    saveLocal();
+    clearTimeout(renderSoon);
+    renderSoon = setTimeout(function again() {
+      const a = document.activeElement;
+      if (a && app.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) { renderSoon = setTimeout(again, 800); return; }
+      render();
+    }, 120);
+  }
+  function startSync() {
+    if (!syncAllowed()) return;
+    window.LHSync.start(session.uid, {
+      get: () => state,
+      changed: onRemoteChange,
+      status: (st) => { syncStatus = st; const el = document.getElementById('sync-status'); if (el) el.outerHTML = syncStatusHTML(); },
+    });
+  }
+  function syncStatusHTML() {
+    const s = window.LHSync ? window.LHSync.status : 'off';
+    const t = { online: ['ok', 'Up to date'], sending: ['', 'Sending your changes…'], connecting: ['', 'Connecting…'], offline: ['warn', "Offline: changes are kept on this device and sent when you're back online"], error: ['warn', "Couldn't reach the online records. Changes are kept on this device."], off: ['', 'Off'] }[s] || ['', s];
+    return `<span id="sync-status" class="sync-status ${t[0]}">${esc(t[1])}</span>`;
+  }
   // Names and phone numbers only: no NRC, passport or TPIN anywhere. Returns true if it removed something.
   function stripIds(st) {
     const ID_FIELDS = ['nrc', 'nrcVerified', 'passport', 'tpin'];
@@ -926,6 +964,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   L.more = function () {
     const item = (href, ic, title, meta) => `<a class="row" href="#/${href}"><span class="tile">${icon(ic)}</span><div class="grow"><div class="title">${title}</div><div class="meta">${meta}</div></div>${icon('chev', 'chev')}</a>`;
     return `${head('More')}
+      ${cloudCard()}
       ${textSizeCard()}
       ${smsAutoCard()}
       <div class="list mt">
@@ -943,6 +982,10 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   };
 
   function demoControls() {
+    // Real records online: no demo switching or resetting, which would overwrite them.
+    if (session && session.uid && cloudPref().uid === session.uid) {
+      return `<section class="section"><div class="list"><button class="row" data-action="logout"><span class="tile neutral">${icon('logout')}</span><div class="grow"><div class="title">Log out</div><div class="meta">Your records stay online. Sign in again with your number to see them.</div></div></button></div></section>`;
+    }
     return `<section class="section"><div class="section-head"><h2>Demo</h2></div><div class="list">
       <button class="row" data-action="switchRole"><span class="tile neutral">${icon('swap')}</span><div class="grow"><div class="title">View as landlord, tenant or caretaker</div><div class="meta">See what each person sees</div></div>${icon('chev', 'chev')}</button>
       <button class="row" data-action="resetDemo"><span class="tile neutral">${icon('clock')}</span><div class="grow"><div class="title">Reset demo data</div><div class="meta">Start again with sample properties</div></div></button>
@@ -2487,7 +2530,43 @@ We never sell your data or use it for adverts.</div>
       if (!d.keep) { session = null; saveSession(); ui.login = { step: 'phone', phone: '' }; }
       closeSheet(); render(); toast('Demo data reset');
     },
-    logout: () => { if (session && session.uid && window.LHCloud && window.LHCloud.ready) window.LHCloud.signOut(); session = null; saveSession(); ui.login = { step: 'phone', phone: '' }; location.hash = ''; render(); },
+    cloudSetup: () => cloudSetupSheet(false),
+    cloudUpload: async () => moveOnline(false),
+    cloudStartEmpty: async () => moveOnline(true),
+    cloudDownload: async () => {
+      if (!syncAllowed()) return;
+      setSheet(`${sheetHead('Loading your records')}<div class="empty">${icon('download')}<div class="mt-s">Getting your records…</div></div>`);
+      try {
+        const parts = await window.LHSync.download(session.uid);
+        state = { ...LH.seed(T()), ...parts, version: 1 };
+        // Messages tenants wrote on this phone stay here until tenants have their own accounts (Phase 4).
+        state.messages = parts.messages || [];
+        stripIds(state);
+        saveLocal();
+        setCloudPref({ uid: session.uid, since: new Date().toISOString() });
+        startSync();
+        closeSheet(); go('home'); render();
+        toast(`Loaded ${state.tenants.length} tenants and ${state.payments.length} payments`);
+      } catch (e) {
+        console.warn(e);
+        setSheet(`${sheetHead('Your records online')}<p class="muted">Couldn't load your records. Check your internet and try again.</p><button class="btn block mt" data-action="closeSheet">OK</button>`);
+      }
+    },
+    cloudStop: () => {
+      openSheet(`${sheetHead('Stop syncing on this device?')}<p class="muted">Your records stay online and on your other devices. This device keeps its own copy but stops sending and receiving changes.</p>
+        <div class="btn-row mt"><button class="btn" data-action="closeSheet">Cancel</button><button class="btn danger" data-action="cloudStopYes">Stop syncing</button></div>`);
+    },
+    cloudStopYes: () => { window.LHSync.stop(); setCloudPref(null); closeSheet(); render(); toast('Syncing stopped on this device'); },
+    logout: () => {
+      // Records kept online leave this device when you log out, so nobody else using it can see them.
+      if (session && session.uid && cloudPref().uid === session.uid) {
+        state = LH.seed(T()); saveLocal(); setCloudPref(null);
+        session = null; saveSession();
+        const done = () => { location.hash = ''; location.reload(); };
+        Promise.all([window.LHCloud.signOut(), window.LHSync.forget()]).then(done, done);
+        return;
+      }
+      if (window.LHSync && window.LHSync.ready) window.LHSync.stop(); if (session && session.uid && window.LHCloud && window.LHCloud.ready) window.LHCloud.signOut(); session = null; saveSession(); ui.login = { step: 'phone', phone: '' }; location.hash = ''; render(); },
     loginBack: () => { ui.login.step = 'phone'; render(); },
     skipPin: () => finishLogin(),
     pay: () => paySheet(),
@@ -2594,6 +2673,82 @@ We never sell your data or use it for adverts.</div>
     if (ui.login.uid) { session.uid = ui.login.uid; session.phone = ph; } // signed in online (Firebase)
     saveSession(); ui.login = { step: 'phone', phone: '' }; location.hash = '#/home'; render();
     toast(`Signed in as ${me().name.split(' ')[0]}`);
+    if (session.uid && session.role === 'landlord') {
+      if (cloudPref().uid === session.uid) startSync();
+      else setTimeout(() => cloudSetupSheet(true), 600);
+    }
+  }
+
+  /* The first time on a device: copy its records online, start with none, or load the records
+     already online from another device. */
+  async function cloudSetupSheet(afterLogin) {
+    if (!syncAllowed()) return;
+    openSheet(`${sheetHead('Your records online')}<div class="empty">${icon('clock')}<div class="mt-s">Checking your online records…</div></div>`);
+    let exists;
+    try { exists = await window.LHSync.remoteExists(session.uid); }
+    catch (e) { return setSheet(`${sheetHead('Your records online')}<p class="muted">Couldn't check your online records. Connect to the internet and try again from More → Your records online.</p><button class="btn block mt" data-action="closeSheet">OK</button>`); }
+    if (!sheetRoot.classList.contains('open')) return;
+    const n = (k) => (state[k] || []).length;
+    if (exists) {
+      return setSheet(`${sheetHead('Your records are online')}
+        <p class="muted">This account already has records online, from another phone or computer. Load them onto this device so it shows the same records.</p>
+        <div class="banner warn">${icon('info', 'sm')}<span>The records on this device (${n('tenants')} tenants, ${n('payments')} payments) will be replaced by your online records.</span></div>
+        <button class="btn primary block lg mt" data-action="cloudDownload">${icon('download', 'sm')}Load my online records</button>
+        <button class="btn ghost block mt-s" data-action="closeSheet">${afterLogin ? 'Not now' : 'Cancel'}</button>`);
+    }
+    setSheet(`${sheetHead('Keep your records online?')}
+      <p class="muted">Your records are saved on this device only. Put them online so they're safe if this phone is lost, and so your other phones and computers show the same tenants and payments. It still works with no internet.</p>
+      <div class="card pad mt"><div class="title" style="font-weight:650">The records on this device</div><div class="small muted">${n('properties')} properties · ${n('units')} houses, rooms and shops · ${n('tenants')} tenants · ${n('payments')} payments</div></div>
+      <button class="btn primary block lg mt" data-action="cloudUpload">${icon('send', 'sm')}Move these records online</button>
+      <button class="btn block mt-s" data-action="cloudStartEmpty">Start online with no records</button>
+      <button class="btn ghost block mt-s" data-action="closeSheet">${afterLogin ? 'Not now' : 'Cancel'}</button>
+      <p class="small faint mt">Records are stored with Google Firebase in Johannesburg, South Africa. Only you can see them.</p>`);
+  }
+
+  // Copy this device's records online (or start online with none), then keep in step.
+  async function moveOnline(empty) {
+    if (!syncAllowed()) return;
+    const u = window.LHCloud.user(); if (!u) return toast('Sign in again with your phone number first');
+    if (navigator.onLine === false) return toast('You need internet for the first copy. Connect and try again.');
+    if (empty) {
+      const L0 = state.landlord;
+      state = { ...LH.seed(T()), landlord: L0 };
+      ['properties', 'units', 'tenants', 'caretakers', 'payments', 'notices', 'requests', 'messages', 'activity', 'deductions', 'smsWaiting'].forEach((k) => { state[k] = []; });
+      state.remindedAt = {}; state.receiptSeq = 0;
+    }
+    // The online records belong to the number you signed in with.
+    state.landlord.phone = LH.cleanPhone(u.phone);
+    stripIds(state);
+    setSheet(`${sheetHead('Moving your records online')}<div class="empty">${icon('send')}<div class="mt-s">Copying your records… keep the app open.</div></div>`);
+    try {
+      const count = await window.LHSync.upload(session.uid, state, u.phone);
+      saveLocal();
+      setCloudPref({ uid: session.uid, since: new Date().toISOString() });
+      log(empty ? 'Started keeping records online' : `Moved ${state.tenants.length} tenants and ${state.payments.length} payments online`);
+      startSync(); save();
+      setSheet(`${sheetHead('Your records are online')}<div class="empty">${icon('check')}<div class="mt-s"><strong>${count} records copied.</strong><br>Sign in with your number on another phone or computer to see the same records.</div></div><button class="btn primary block lg mt" data-action="closeSheet">Done</button>`);
+      render();
+    } catch (e) {
+      console.warn(e);
+      const why = e && e.code === 'permission-denied' ? "Firebase didn't accept them. Sign out and sign in again with your number, then try again." : 'Check your internet and try again.';
+      setSheet(`${sheetHead('Your records online')}<p class="muted">Couldn't copy your records online. ${why}</p><button class="btn block mt" data-action="closeSheet">OK</button>`);
+    }
+  }
+
+  function cloudCard() {
+    if (!window.LHSync || !window.LHSync.ready) return '';
+    const head2 = '<section class="section"><div class="section-head"><h2>Your records online</h2></div>';
+    if (!session.uid) {
+      return `${head2}<div class="card pad link-card"><span class="at-icon">${icon('shield')}</span><div class="grow"><strong>Only on this device</strong><div class="small muted">Sign in with your phone number (not the demo) to keep your records safe online and see them on your other phones and computers.</div>
+        <button class="btn primary sm mt-s" data-action="logout">Sign in with my number</button></div></div></section>`;
+    }
+    if (syncOn()) {
+      return `${head2}<div class="card pad link-card ok"><span class="at-icon">${icon('check')}</span><div class="grow"><strong>On: your records are kept online</strong><div class="small muted">Changes made on your other phones and computers appear here by themselves.</div>
+        <div class="mt-s">${syncStatusHTML()}</div>
+        <button class="link-btn mt-s" data-action="cloudStop">Stop syncing on this device</button></div></div></section>`;
+    }
+    return `${head2}<div class="card pad link-card"><span class="at-icon">${icon('shield')}</span><div class="grow"><strong>Only on this device</strong><div class="small muted">Put your records online so they're safe if this phone is lost, and use them on your other phones and computers.</div>
+      <button class="btn primary sm mt-s" data-action="cloudSetup">Set up</button></div></div></section>`;
   }
 
   /* ---------- Forms ---------- */
@@ -3065,6 +3220,11 @@ We never sell your data or use it for adverts.</div>
 
   load();
   render();
+
+  // Records online: carry on syncing if this device was syncing when it was last open.
+  if (window.LHCloud && window.LHCloud.ready && session && session.uid && cloudPref().uid === session.uid) {
+    window.LHCloud.whenReady().then((u) => { if (u && u.uid === session.uid) startSync(); });
+  }
 
   // Android app: record any MoMo / Airtel payments that came in while the app was closed.
   setTimeout(() => nativeSmsSync(), 600);

@@ -43,11 +43,13 @@ The Android version reads the "money received" pop-ups from MTN MoMo, Airtel Mon
 | `app.js` | Screens for each role, sheets, actions, routing |
 | `styles.css` | Design system: one accent colour, neutral greys, status colours only for meaning |
 | `sw.js` | Offline caching of the app shell |
+| `cloud.js` | Sign-in with a phone number and SMS code (Firebase) |
+| `sync.js` | Keeps a landlord's records in step between their devices (Firebase Firestore) |
 | `server.js` | Tiny local preview server |
 
 ## Not real yet (needs a backend)
 
-- Data is stored in the browser (`localStorage`); there is no server, sync or multi-device login
+- Records are kept on each device and, for a landlord signed in with their phone number who turns it on (More → Your records online), synced through Firebase so all their devices show the same records. Tenants and caretakers using their own phones come in Phase 4
 - Sign-in with a phone number and SMS code uses Firebase (project `landlord-hub-volta`, Zambian numbers only, a test number for development). The PIN and fingerprint step is still simulated, and records still live on each device until they move online
 - MTN MoMo / Airtel Money payments are simulated; the real flow needs the Collections API and Airtel Open API with callbacks
 - WhatsApp/SMS reminders open WhatsApp or the SMS app with the message filled in; automatic sending needs WhatsApp Business API and an SMS gateway

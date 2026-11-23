@@ -10,6 +10,7 @@
      sendCode(phone)       → texts a code to a Zambian number like 0961234567
      confirmCode(code)     → checks the 6-digit code; resolves with { uid, phone }
      user()                → the signed-in person, or null
+     whenReady()           → resolves with the signed-in person (or null) once Firebase has checked
      signOut()
    Errors are thrown as Error objects whose message can be shown to the person as is. */
 (function () {
@@ -21,6 +22,10 @@
   auth.languageCode = 'en';
 
   var verifier = null, pending = null;
+  // Firebase remembers who signed in on this device; this settles once it has checked.
+  var authReady = new Promise(function (resolve) {
+    var off = auth.onAuthStateChanged(function () { off(); resolve(); });
+  });
 
   // Google's robot check, needed for phone sign-in on websites. It is invisible most of the time.
   function getVerifier() {
@@ -100,5 +105,8 @@
       return u ? { uid: u.uid, phone: u.phoneNumber } : null;
     },
     signOut: function () { pending = null; return auth.signOut().catch(function () {}); },
+    // Resolves with the signed-in person ({ uid, phone }) or null, once Firebase has checked.
+    whenReady: function () { return authReady.then(function () { var u = auth.currentUser; return u ? { uid: u.uid, phone: u.phoneNumber } : null; }); },
+    app: app,
   };
 })();

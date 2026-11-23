@@ -7,7 +7,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const src = path.join(root, 'node_modules', 'firebase');
 const out = path.join(root, 'vendor', 'firebase');
-const files = ['firebase-app-compat.js', 'firebase-auth-compat.js'];
+const files = ['firebase-app-compat.js', 'firebase-auth-compat.js', 'firebase-firestore-compat.js'];
 const version = require(path.join(src, 'package.json')).version;
 
 fs.rmSync(out, { recursive: true, force: true });

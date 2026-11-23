@@ -889,3 +889,11 @@ body { letter-spacing: -0.005em; font-feature-settings: "tnum" 1; }
 .add-review { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; background: var(--surface-2); }
 .add-review-name { font: 680 calc(19px * var(--ts))/1.25 var(--font-display); margin-top: 4px; }
 .add-review-sum { margin-top: 10px; font-size: calc(15px * var(--ts)); line-height: 1.5; }
+
+/* ---------- Records online: sync status ---------- */
+.sync-status { display: inline-flex; align-items: center; gap: 6px; font-size: calc(13px * var(--ts)); font-weight: 600; color: var(--muted); }
+.sync-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
+.sync-status.ok { color: var(--paid); }
+.sync-status.ok::before { background: var(--paid); }
+.sync-status.warn { color: var(--overdue); }
+.sync-status.warn::before { background: var(--overdue); }

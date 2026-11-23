@@ -78,12 +78,27 @@ A person who isn't signed in, or is signed in but isn't the landlord or one of t
 3. **Tenant or caretaker:** the app asks for `members` documents whose `phone` is their own number
    (a collection-group query). Each one tells it which landlord, and which tenancy or properties.
 
-## Things to settle in Phase 3
+## How syncing works (Phase 3, `sync.js`)
 
-- **Changing phones:** a landlord's records are tied to their sign-in account. Signing in with the same
-  number on a new phone gives the same account, so the records follow them.
-- **Receipt numbers:** take the next number from `counters/receipts` in a transaction when online.
-  Offline, the app needs a temporary receipt number that is swapped for a real one when it syncs.
+- The app keeps working from its own copy of the records on the device. When a landlord signed in with
+  their phone number turns syncing on (More → Your records online), every save sends only what changed,
+  and changes from their other devices arrive and appear by themselves.
+- **First device:** "Move these records online" copies everything up (or "Start online with no records").
+  **Another device:** signing in with the same number offers "Load my online records".
+- **Offline:** Firebase keeps changes on the device and sends them when the signal returns.
+- **When a device opens, the online records win.** Every change a device makes is handed to Firebase
+  straight away and kept on the device until sent, so nothing is lost. A record missing online is only
+  removed from the device once Firebase's server (not just the offline copy) confirms it is gone.
+- **Logging out** removes the records and Firebase's offline copy from the device; they stay online.
+- Every record gets `_o` (its place in the list) so lists come back in the same order on every device.
+- Messages a tenant wrote stay on the phone they were written on until tenants have accounts (Phase 4).
+- The demo never syncs.
+
+## Still to settle
+
+- **Receipt numbers:** `receiptSeq` syncs and never goes backwards, but two devices recording payments while
+  both offline could give out the same number. The fix is to take numbers from `counters/receipts` in a
+  transaction when online, with a temporary number while offline.
 - **Rent references:** a reference is worked out from the landlord's own payment records, so a tenant can't type
   it in. Today a future landlord checks it by calling the landlord named on it and quoting its code (`R-…`).
   Once records are online, a read-only `references/{code}` record could let them check it by link instead.
