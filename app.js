@@ -71,8 +71,20 @@
     window.LHSync.start(session.uid, {
       get: () => state,
       changed: onRemoteChange,
-      status: (st) => { syncStatus = st; const el = document.getElementById('sync-status'); if (el) el.outerHTML = syncStatusHTML(); },
+      status: (st) => { syncStatus = st; loadingBar(st === 'connecting'); const el = document.getElementById('sync-status'); if (el) el.outerHTML = syncStatusHTML(); },
     });
+  }
+  /* Loading animation (styles.css "Loading"): the round logo with a turning ring. Full screen, or smaller
+     inside a sheet. `text` may hold HTML the app wrote itself; anything typed by a person must be escaped. */
+  function loaderHTML(title, text, inSheet) {
+    return `<div class="loader${inSheet ? ' in-sheet' : ''}" role="status" aria-live="polite"><div class="loader-box"><div class="loader-badge"><div class="logo" aria-hidden="true"></div></div>${title ? `<h2>${title}</h2>` : ''}<p>${text}</p></div></div>`;
+  }
+  // The thin bar along the top while the app checks its online records (never longer than 20 seconds).
+  let loadingBarTimer = null;
+  function loadingBar(on) {
+    document.body.classList.toggle('loading-data', !!on);
+    clearTimeout(loadingBarTimer);
+    if (on) loadingBarTimer = setTimeout(() => document.body.classList.remove('loading-data'), 20000);
   }
   function syncStatusHTML() {
     const s = window.LHSync ? window.LHSync.status : 'off';
@@ -2049,7 +2061,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     : `Hello ${first(t.name)},\n\nThis is ${state.landlord.name}. I now use Landlord Hub to keep track of rent and receipts.\n\nPlease tap the link below to join me as the tenant of ${unitOf(t).label}, ${propOf(unitOf(t)).name}:\n\n${link}\n\nThank you.`;
   async function inviteSheet(id, justAdded) {
     const t = byId(state.tenants, id); if (!t) return;
-    openSheet(`${sheetHead(justAdded ? `${first(t.name)} has been added` : 'Invite to the app')}<div class="empty">${icon('link')}<div class="mt-s">Making ${esc(first(t.name))}'s link…</div></div>`);
+    openSheet(`${sheetHead(justAdded ? `${first(t.name)} has been added` : 'Invite to the app')}${loaderHTML('', `Making ${esc(first(t.name))}'s link…`, true)}`);
     const online = syncOn() && session.role === 'landlord';
     const link = online ? `${location.origin}${location.pathname}?invited=1` : (await shortInviteLink(t)) || longInviteLink(t);
     if (!sheetRoot.classList.contains('open')) return; // closed while waiting
@@ -2083,7 +2095,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         .then((x) => { shortJoins[code] = { data: x.data }; render(); })
         .catch(() => { shortJoins[code] = { failed: true }; render(); });
     }
-    return `<div class="auth"><div class="auth-box">${brand}<h1>Opening your invite…</h1><p class="lede">One moment.</p></div></div>`;
+    return loaderHTML('Opening your invite…', 'One moment.');
   }
 
   /* An invite link can be made by anyone, so nothing in it is trusted: every field is checked and
@@ -2554,7 +2566,7 @@ We never sell your data or use it for adverts.</div>
         <form data-form="otp">
           <label class="field"><span class="sr">One-time code</span><input class="input otp" name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required autofocus placeholder="••••••"></label>
           <label class="check" style="margin:4px 0 18px"><input type="checkbox" name="consent" required><span class="small">I agree to Landlord Hub keeping my name, phone and rent records to manage my tenancy, as set out in the <a href="#" data-action="showPrivacy">privacy notice</a>.</span></label>
-          <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? 'Checking…' : 'Continue'}</button>
+          <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? '<span class="spin" aria-hidden="true"></span>Checking…' : 'Continue'}</button>
           <button class="btn ghost block mt-s" type="button" data-action="loginBack">Use a different number</button>
         </form></div></div>`;
     }
@@ -2574,7 +2586,7 @@ We never sell your data or use it for adverts.</div>
       <p class="lede">Track every house, tenant and kwacha. Tenants pay with MTN MoMo or Airtel Money and get a receipt straight away.</p>`}
       <form data-form="phone">
         <label class="field"><span class="label">Your phone number</span><div class="input-group"><span class="prefix">+260</span><input class="input" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="96 123 4567" value="${esc(s.phone ? LH.cleanPhone(s.phone).slice(1) : '')}"></div></label>
-        <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? 'Sending your code…' : 'Send me a code'}</button>
+        <button class="btn primary block lg" type="submit"${s.busy ? ' disabled' : ''}>${s.busy ? '<span class="spin" aria-hidden="true"></span>Sending your code…' : 'Send me a code'}</button>
         ${s.busy ? '<p class="small muted mt-s" role="status">Google may ask you to pick some pictures to check you\'re not a robot. Finish that and tap <strong>Verify</strong>, and your code will be sent.</p>' : ''}
       </form>
       <div class="divider">or explore the demo as</div>
@@ -2833,7 +2845,7 @@ We never sell your data or use it for adverts.</div>
     cloudStartEmpty: async () => moveOnline(true),
     cloudDownload: async () => {
       if (!syncAllowed()) return;
-      setSheet(`${sheetHead('Loading your records')}<div class="empty">${icon('download')}<div class="mt-s">Getting your records…</div></div>`);
+      setSheet(`${sheetHead('Loading your records')}${loaderHTML('', 'Getting your records…', true)}`);
       try {
         const parts = await window.LHSync.download(session.uid);
         state = { ...LH.seed(T()), ...parts, version: 1 };
@@ -2984,7 +2996,7 @@ We never sell your data or use it for adverts.</div>
   async function finishOnlineLogin() {
     const uid = ui.login.uid, ph = LH.cleanPhone(ui.login.phone);
     ui.login = { ...ui.login, busy: true, step: 'pin' };
-    app.innerHTML = `<div class="auth"><div class="auth-box"><div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div><h1>One moment</h1><p class="lede">Finding your records…</p></div></div>`;
+    app.innerHTML = loaderHTML('One moment', 'Finding your records…');
     let found = [];
     try { found = await window.LHSync.findMemberships(ph); }
     catch (e) { console.warn(e); ui.login = { step: 'phone', phone: ph }; render(); return toast(navigator.onLine === false ? 'You need internet to sign in. Connect and try again.' : "Couldn't check your account just now. Try again in a minute."); }
@@ -3008,7 +3020,7 @@ We never sell your data or use it for adverts.</div>
   }
   // Open a tenant's or caretaker's share of their landlord's records on this device.
   async function openMembership(m, uid, ph) {
-    app.innerHTML = `<div class="auth"><div class="auth-box"><div class="logo auth-logo" role="img" aria-label="Landlord Hub"></div><h1>One moment</h1><p class="lede">Getting your ${m.role === 'tenant' ? 'rent and receipts' : 'properties'}…</p></div></div>`;
+    app.innerHTML = loaderHTML('One moment', `Getting your ${m.role === 'tenant' ? 'rent and receipts' : 'properties'}…`);
     try {
       const share = await window.LHSync.downloadMember({ ...m, phone: ph });
       if (m.role === 'tenant' && !share.tenants.length) throw new Error('no tenancy');
@@ -3028,7 +3040,7 @@ We never sell your data or use it for adverts.</div>
     window.LHSync.startMember({ ...session.member, phone: session.phone }, {
       get: () => state,
       changed: onRemoteChange,
-      status: (st) => { syncStatus = st; const el = document.getElementById('sync-status'); if (el) el.outerHTML = syncStatusHTML(); },
+      status: (st) => { syncStatus = st; loadingBar(st === 'connecting'); const el = document.getElementById('sync-status'); if (el) el.outerHTML = syncStatusHTML(); },
     });
   }
 
@@ -3036,7 +3048,7 @@ We never sell your data or use it for adverts.</div>
      already online from another device. */
   async function cloudSetupSheet(afterLogin) {
     if (!syncAllowed()) return;
-    openSheet(`${sheetHead('Your records online')}<div class="empty">${icon('clock')}<div class="mt-s">Checking your online records…</div></div>`);
+    openSheet(`${sheetHead('Your records online')}${loaderHTML('', 'Checking your online records…', true)}`);
     let exists;
     try { exists = await window.LHSync.remoteExists(session.uid); }
     catch (e) { return setSheet(`${sheetHead('Your records online')}<p class="muted">Couldn't check your online records. Connect to the internet and try again from More → Your records online.</p><button class="btn block mt" data-action="closeSheet">OK</button>`); }
@@ -3072,7 +3084,7 @@ We never sell your data or use it for adverts.</div>
     // The online records belong to the number you signed in with.
     state.landlord.phone = LH.cleanPhone(u.phone);
     stripIds(state);
-    setSheet(`${sheetHead('Moving your records online')}<div class="empty">${icon('send')}<div class="mt-s">Copying your records… keep the app open.</div></div>`);
+    setSheet(`${sheetHead('Moving your records online')}${loaderHTML('', 'Copying your records… keep the app open.', true)}`);
     try {
       const count = await window.LHSync.upload(session.uid, state, u.phone);
       saveLocal();

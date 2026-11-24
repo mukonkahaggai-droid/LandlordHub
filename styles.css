@@ -922,3 +922,41 @@ body { letter-spacing: -0.005em; font-feature-settings: "tnum" 1; }
 .section.room .section-head { margin-bottom: 6px; }
 
 .room-head.no-spaces span:nth-child(2) { display: none; }
+
+/* ---------- Loading: shown whenever the app is getting its records ready ----------
+   The round red logo breathes gently while a ring turns around it. Full screen when opening,
+   smaller inside a sheet, a thin bar along the top while syncing, and a spinner in busy buttons. */
+@keyframes lh-spin { to { transform: rotate(360deg); } }
+@keyframes lh-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(0.94); } }
+@keyframes lh-bar { 0% { left: -40%; width: 40%; } 60% { left: 100%; width: 60%; } 100% { left: 100%; width: 60%; } }
+.loader { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; text-align: center; background: var(--bg); }
+.loader-box { max-width: 320px; }
+.loader-badge { position: relative; width: 104px; height: 104px; margin: 0 auto 22px; }
+.loader-badge .logo {
+  width: 100%; height: 100%; aspect-ratio: auto; border-radius: 50%;
+  background-size: 92% auto; background-position: 50% 50%;
+  box-shadow: 0 8px 24px rgba(126, 2, 35, 0.25);
+  animation: lh-breathe 1.8s ease-in-out infinite;
+}
+.loader-badge::after {
+  content: ''; position: absolute; inset: -9px; border-radius: 50%;
+  border: 3px solid var(--accent-soft); border-top-color: var(--accent);
+  animation: lh-spin 0.9s linear infinite;
+}
+.loader h2 { font: 680 calc(22px * var(--ts))/1.2 var(--font-display); letter-spacing: -0.02em; margin: 0 0 6px; }
+.loader p { color: var(--muted); font-size: calc(15px * var(--ts)); margin: 0; }
+.loader.in-sheet { min-height: 0; padding: 28px 0 20px; background: none; }
+.loader.in-sheet .loader-badge { width: 72px; height: 72px; margin-bottom: 18px; }
+.loader.in-sheet .loader-badge::after { inset: -7px; }
+/* A thin moving bar along the top while the app checks its online records. */
+body.loading-data::before {
+  content: ''; position: fixed; top: 0; left: -40%; height: 3px; width: 40%; z-index: 100;
+  background: var(--accent); border-radius: 0 2px 2px 0;
+  animation: lh-bar 1.4s ease-in-out infinite;
+}
+/* Busy buttons: "Sending your code…" with a small turning circle. */
+.spin {
+  display: inline-block; width: 1em; height: 1em; margin-right: 8px; vertical-align: -0.15em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: lh-spin 0.7s linear infinite;
+}
