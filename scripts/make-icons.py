@@ -50,8 +50,10 @@ save(square(180, 0.92), 'icons', 'apple-touch-icon.png')
 save(square(512, 0.74), 'icons', 'icon-maskable-512.png')
 
 # ---- Windows desktop shortcut (icons/landlord-hub.ico, every size Windows asks for) ----
-ico = square(256, 0.92)
-ico_path = os.path.join(ROOT, 'icons', 'landlord-hub.ico')
+# Round, in the logo's own colours. The logo sits well inside the circle so its corners aren't cut.
+# (A new file name, so Windows doesn't keep showing its saved copy of the old square icon.)
+ico = round_mask(square(1024, 0.74)).resize((256, 256), Image.LANCZOS)
+ico_path = os.path.join(ROOT, 'icons', 'landlord-hub-circle.ico')
 ico.save(ico_path, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 print('wrote', os.path.relpath(ico_path, ROOT))
 
