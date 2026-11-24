@@ -56,6 +56,21 @@ gradlew.bat assembleDebug
 
 The app file appears in `android\app\build\outputs\apk\debug\app-debug.apk`. A copy for phones is kept in `builds\Landlord-Hub-test.apk`; with `node server.js` running, a phone on the same Wi-Fi can download it from `http://192.168.1.177:5173/builds/Landlord-Hub-test.apk`.
 
+## Download page for other phones
+
+Anyone can download the test app from GitHub, on any network:
+
+- Page: https://github.com/mukonkahaggai-droid/LandlordHub/releases/tag/android-test
+- Direct download: https://github.com/mukonkahaggai-droid/LandlordHub/releases/latest/download/Landlord-Hub.apk
+
+After building a new `builds\Landlord-Hub-test.apk`, put it on that page (same links, so nobody needs a new one):
+
+```bash
+npm run android:publish
+```
+
+Build it on this laptop only: a phone installs an update over the old app only if both were made with this laptop's signing key.
+
 ## Build and install
 
 1. Copy the latest app into the Android project:

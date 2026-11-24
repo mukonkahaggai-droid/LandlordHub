@@ -8,6 +8,7 @@
     "build": "node scripts/build-www.js",
     "android:sync": "node scripts/build-www.js && npx cap sync android",
     "android:open": "npx cap open android",
+    "android:publish": "node -e \"require('fs').copyFileSync('builds/Landlord-Hub-test.apk','builds/Landlord-Hub.apk')\" && gh release upload android-test builds/Landlord-Hub.apk --clobber",
     "vendor:firebase": "node scripts/vendor-firebase.js",
     "test:sms": "node tests/sms.test.js",
     "test:rules": "firebase emulators:exec --only firestore --project demo-landlord-hub \"node --test tests/rules.test.js\""
