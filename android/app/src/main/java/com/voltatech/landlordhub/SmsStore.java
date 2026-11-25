@@ -50,6 +50,9 @@ final class SmsStore {
 
     /** Keeps a message for the app. Returns false if it was already seen (pop-ups are often updated). */
     static synchronized boolean add(Context ctx, String from, String body, long date) {
+        // A real payment message is a few hundred characters; anything far longer isn't one
+        // (another app could share a huge text into Landlord Hub).
+        if (from == null || body == null || from.length() > 60 || body.length() > 1000) return false;
         try {
             String key = from + "|" + body;
             JSONArray seen = read(ctx, SEEN);

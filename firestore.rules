@@ -34,6 +34,16 @@ service cloud.firestore {
     function isAmount(v) { return v is number && v > 0 && v < 100000000; }
     function isMessageText(v) { return v is string && v.size() > 0 && v.size() <= 500; }
     function noSecrets(d) { return !('nrc' in d) && !('tpin' in d) && !('passport' in d) && !('nrcVerified' in d); }
+    // Records a tenant or caretaker creates may only carry the app's own fields, at sensible lengths,
+    // under their own id, so a changed app can't stuff extra or oversized data into the landlord's records.
+    function short(d, k, n) { return d.get(k, null) == null || (d.get(k, null) is string && d.get(k, null).size() <= n); }
+    function ownId(d, id) { return d.get('id', id) == id; }
+    function memberPayment(d, id) {
+      return d.keys().hasOnly(['id', 'tenantId', 'tenancyId', 'propertyId', 'amount', 'date', 'method', 'ref', 'by', 'byName',
+          'status', 'proof', 'note', 'at', 'receipt', '_o'])
+        && ownId(d, id) && short(d, 'date', 10) && short(d, 'method', 40) && short(d, 'ref', 60) && short(d, 'byName', 80)
+        && short(d, 'proof', 120) && short(d, 'note', 300) && short(d, 'receipt', 40) && short(d, 'tenancyId', 60);
+    }
 
     // A tenant or caretaker finds the landlords they belong to by their own phone number.
     match /{path=**}/members/{phone} {
@@ -106,14 +116,17 @@ service cloud.firestore {
               && request.resource.data.status == 'pending'
               && request.resource.data.by == 'tenant'
               && isAmount(request.resource.data.amount)
-              && !('receipt' in request.resource.data))
+              && !('receipt' in request.resource.data)
+              && memberPayment(request.resource.data, payid)
+              && request.resource.data.get('tenancyId', member(lid).get('tenancyId', '')) == member(lid).get('tenancyId', ''))
           // A caretaker records cash for a tenant in one of their properties; a receipt is made at once.
           || (caretakerHas(lid, request.resource.data.propertyId)
               && get(/databases/$(database)/documents/landlords/$(lid)/tenants/$(request.resource.data.tenantId)).data.propertyId == request.resource.data.propertyId
               && request.resource.data.status == 'confirmed'
               && request.resource.data.by == 'caretaker'
               && request.resource.data.method == 'Cash'
-              && isAmount(request.resource.data.amount));
+              && isAmount(request.resource.data.amount)
+              && memberPayment(request.resource.data, payid));
 
         // Only the landlord confirms, rejects, corrects or deletes payments.
         allow update, delete: if isLandlord(lid);
@@ -139,7 +152,10 @@ service cloud.firestore {
           || (isTenant(lid)
               && request.resource.data.tenantId == member(lid).refId
               && request.resource.data.propertyId == member(lid).propertyId
-              && request.resource.data.status == 'open');
+              && request.resource.data.status == 'open'
+              && request.resource.data.keys().hasOnly(['id', 'tenantId', 'propertyId', 'category', 'text', 'status', 'date', '_o'])
+              && ownId(request.resource.data, rid) && short(request.resource.data, 'category', 40)
+              && short(request.resource.data, 'text', 1000) && short(request.resource.data, 'date', 10));
         // A caretaker can only move a repair along (open → in progress → done) on their properties.
         allow update: if isLandlord(lid)
           || (caretakerHas(lid, resource.data.propertyId)
@@ -160,7 +176,10 @@ service cloud.firestore {
               && request.resource.data.tenantId == member(lid).refId
               && request.resource.data.propertyId == member(lid).propertyId
               && request.resource.data.read == false
-              && isMessageText(request.resource.data.text));
+              && isMessageText(request.resource.data.text)
+              && request.resource.data.keys().hasOnly(['id', 'tenantId', 'propertyId', 'from', 'about', 'promise', 'text', 'date', 'at', 'read', '_o'])
+              && ownId(request.resource.data, mid) && short(request.resource.data, 'about', 60)
+              && short(request.resource.data, 'promise', 10) && short(request.resource.data, 'date', 10));
         // The landlord can mark a tenant's message as read; a tenant can mark the landlord's as read.
         // Nobody can change what was said.
         allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
@@ -172,7 +191,10 @@ service cloud.firestore {
       match /activity/{aid} {
         allow read, update, delete: if isLandlord(lid);
         // Tenants and caretakers can add to the log (e.g. "Esther recorded K500 cash"), never read or change it.
-        allow create: if isLandlord(lid) || (isMember(lid) && request.resource.data.byPhone == myPhone());
+        allow create: if isLandlord(lid) || (isMember(lid) && request.resource.data.byPhone == myPhone()
+          && request.resource.data.keys().hasOnly(['id', 'date', 'who', 'text', 'at', 'byPhone', '_o'])
+          && ownId(request.resource.data, aid) && short(request.resource.data, 'who', 80)
+          && short(request.resource.data, 'text', 300) && short(request.resource.data, 'date', 10));
       }
 
       match /deductions/{did} {

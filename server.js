@@ -70,12 +70,17 @@ http.createServer((req, res) => {
   const j = urlPath.match(/^\/j\/([A-Za-z0-9]{6})$/);
   if (j) { res.writeHead(302, { Location: `/#/j/${j[1].toUpperCase()}` }); return res.end(); }
 
-  // Never serve saved data or the server's own files.
-  // Hidden files and folders (.git, .claude …) are never served either.
-  if (/^\/(data|node_modules|android|www|scripts)(\/|$)/.test(urlPath) || /(^|\/)\./.test(urlPath) || urlPath === '/server.js') { res.writeHead(404); return res.end('Not found'); }
-
+  // Only the app's own public files are served. The check is made on the real path after it has been
+  // tidied up, ignoring capitals (Windows treats /DATA and /data alike) and backslashes (\local).
   const file = path.normalize(path.join(root, urlPath === '/' ? 'index.html' : urlPath));
   if (!file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
+  const parts = path.relative(root, file).toLowerCase().split(/[\\/]+/);
+  // Saved invites, private notes and codes, tests, tools, and hidden files and folders (.git, .claude …).
+  const PRIVATE = ['data', 'local', 'node_modules', 'android', 'www', 'scripts', 'tests', 'docs', 'graphix'];
+  const ALLOWED_BUILDS = ['landlord-hub-test.apk', 'landlord-hub.apk'];
+  if (PRIVATE.includes(parts[0]) || parts.some((p) => p.startsWith('.')) || parts[0] === 'server.js' || parts[0] === 'package.json'
+    || parts[0] === 'package-lock.json' || /\.(md|rules|py)$/.test(parts[parts.length - 1])
+    || (parts[0] === 'builds' && !(parts.length === 2 && ALLOWED_BUILDS.includes(parts[1])))) { res.writeHead(404); return res.end('Not found'); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
     const type = types[path.extname(file)] || 'application/octet-stream';

@@ -384,3 +384,31 @@ test('collections that are not in the rules are closed', async () => {
   await assertFails(as.landlord().doc('anything/else').set({ x: 1 }));
   await assertFails(as.landlord().doc('anything/else').get());
 });
+
+test("a tenant's or caretaker's phone can't stuff extra or oversized data into the landlord's records", async () => {
+  const t = as.tenant1().doc(L), c = as.caretaker().doc(L);
+  const big = 'x'.repeat(5000);
+  const pay = { id: 'tpX', tenantId: 'T1', propertyId: 'P1', amount: 100, date: '2026-11-23', method: 'Airtel Money', ref: 'CI1', by: 'tenant', byName: 'Chanda', status: 'pending', at: 1, _o: 1 };
+  await assertFails(t.collection('payments').doc('tpX').set({ ...pay, smsKey: 'ref:CI1' }));            // a field the app never sends
+  await assertFails(t.collection('payments').doc('tpX').set({ ...pay, note: big }));                    // far too long
+  await assertFails(t.collection('payments').doc('tpX').set({ ...pay, method: big }));
+  await assertFails(t.collection('payments').doc('tpX').set({ ...pay, id: 'pay1' }));                   // claims another record's id
+  await assertFails(t.collection('payments').doc('tpX').set({ ...pay, tenancyId: 'someone-elses' }));   // another tenancy
+  await assertSucceeds(t.collection('payments').doc('tpX').set(pay));
+  const req = { id: 'trX', tenantId: 'T1', propertyId: 'P1', category: 'Plumbing', text: 'Leak', status: 'open', date: '2026-11-23', _o: 1 };
+  await assertFails(t.collection('requests').doc('trX').set({ ...req, text: big }));
+  await assertFails(t.collection('requests').doc('trX').set({ ...req, updatedBy: 'landlord' }));
+  await assertSucceeds(t.collection('requests').doc('trX').set(req));
+  const msg = { id: 'tmX', tenantId: 'T1', propertyId: 'P1', from: 'tenant', about: 'rent', promise: null, text: 'Hi', date: '2026-11-23', at: 1, read: false, _o: 1 };
+  await assertFails(t.collection('messages').doc('tmX').set({ ...msg, extra: 'x' }));
+  await assertFails(t.collection('messages').doc('tmX').set({ ...msg, about: big }));
+  await assertSucceeds(t.collection('messages').doc('tmX').set(msg));
+  const act = { id: 'taX', date: '2026-11-23', who: 'Chanda', text: 'Reported a payment', byPhone: PH.tenant1, at: 1, _o: 1 };
+  await assertFails(t.collection('activity').doc('taX').set({ ...act, text: big }));
+  await assertFails(t.collection('activity').doc('taX').set({ ...act, who: 'Landlord Hub', extra: 1 }));
+  await assertSucceeds(t.collection('activity').doc('taX').set(act));
+  const cash = { id: 'cpX', tenantId: 'T2', propertyId: 'P1', amount: 500, date: '2026-11-23', method: 'Cash', ref: '', by: 'caretaker', byName: 'Esther', status: 'confirmed', receipt: 'LH-2026-C1-0002', at: 1, _o: 1 };
+  await assertFails(c.collection('payments').doc('cpX').set({ ...cash, receipt: big }));
+  await assertFails(c.collection('payments').doc('cpX').set({ ...cash, fromSms: true }));
+  await assertSucceeds(c.collection('payments').doc('cpX').set(cash));
+});
