@@ -369,6 +369,47 @@
     return out;
   };
 
+  /* ---------- Rent reminders for the landlord (Android notifications) ----------
+     Plans the phone notifications that remind the landlord to send rent reminders: 3 days before the
+     due date, on the due day, 3 days late, and (if chosen) every week after that, at 9:00. Only tenants
+     who still owe that rent are included; tenants due the same day share one notification.
+     owing: [{ id, name, place, amount, due (Date) }]   on: { before3, dueDay, late3, weekly }
+     Returns [{ id, at, kind, ids, title, body }] for times after `now`, at most `days` ahead. */
+  LH.planRentReminders = function (owing, on, now, money, days) {
+    const horizon = LH.addDays(now, days || 60);
+    const at9 = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0);
+    const KINDS = { before3: 'Rent due in 3 days', dueDay: 'Rent due today', late3: 'Rent 3 days late', weekly: 'Rent still unpaid' };
+    const groups = {};
+    const add = (kind, when, x) => {
+      const at = at9(when);
+      if (at <= now || at > horizon) return;
+      const key = kind + '|' + LH.iso(at);
+      (groups[key] = groups[key] || { kind, at, items: [] }).items.push(x);
+    };
+    owing.forEach((x) => {
+      if (!(x.amount > 0) || !x.due) return;
+      if (on.before3) add('before3', LH.addDays(x.due, -3), x);
+      if (on.dueDay) add('dueDay', x.due, x);
+      if (on.late3) add('late3', LH.addDays(x.due, 3), x);
+      if (on.weekly) for (let w = 1; w <= 8; w++) add('weekly', LH.addDays(x.due, 3 + 7 * w), x);
+    });
+    // A stable number for each notification, so it can be replaced or cancelled later.
+    const num = (s) => { let h = 7; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 2000000000; return h + 1; };
+    return Object.keys(groups).sort().map((key) => {
+      const g = groups[key], it = g.items, one = it.length === 1;
+      const total = it.reduce((s, x) => s + x.amount, 0);
+      const dueWord = g.kind === 'before3' ? `is due on ${LH.fmtFormal(it[0].due)}` : g.kind === 'dueDay' ? 'is due today' : 'is still unpaid';
+      const names = it.length <= 2 ? it.map((x) => x.name).join(' and ') : `${it[0].name}, ${it[1].name} and ${it.length - 2} more`;
+      return {
+        id: num(key), at: g.at, kind: g.kind, ids: it.map((x) => x.id),
+        title: one ? `${KINDS[g.kind]}: ${it[0].name}` : `${KINDS[g.kind]}: ${it.length} tenants`,
+        body: one
+          ? `${money(it[0].amount)} for ${it[0].place} ${dueWord}. Tap to review and send a reminder.`
+          : `${names}: ${money(total)} in total ${dueWord.replace(/^is /, '')}. Tap to review and send reminders.`,
+      };
+    });
+  };
+
   /* ---------- Checklist for pop-ups from the networks (Android app) ----------
      A pop-up is only read as a payment when it passes every check for the network that sent it:
      - Sender: named Airtel Money (any spelling or capitals), MoMo / MTN, or Zamtel. Never a phone number.
@@ -516,7 +557,7 @@
         { id: 'A1', date: LH.iso(LH.addDays(today, -3)), who: 'Haggai Mukonka', text: 'Sent "Water interruption on Saturday" to Kabulonga Flats' },
         { id: 'A2', date: LH.iso(LH.addDays(today, -6)), who: 'Esther Mumba', text: 'Marked "Window latch in Room 1" as in progress' },
       ],
-      reminders: { before5: true, dueDay: true, late3: true, weekly: true, channel: 'whatsapp' },
+      reminders: { before3: true, dueDay: true, late3: true, weekly: false, v2: true },
       remindedAt: {},
       receiptSeq: 0,
     };

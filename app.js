@@ -40,6 +40,7 @@
     // Rooms, tenancies and payment links stay complete (a tenant's or caretaker's phone only holds their share).
     if (!(session && session.member)) LH.migrate(state);
     saveLocal(); if (syncOn()) window.LHSync.push();
+    if (window.LHNative && window.LHNative.notify) scheduleRentNotes(); // a payment may cancel a reminder
   }
 
   /* ---------- Records online (Phase 3) ----------
@@ -58,6 +59,7 @@
   // (after the person finishes typing, so a box they're filling in isn't wiped).
   function onRemoteChange() {
     saveLocal();
+    if (window.LHNative && window.LHNative.notify) scheduleRentNotes(); // paid on another device
     clearTimeout(renderSoon);
     renderSoon = setTimeout(function again() {
       const a = document.activeElement;
@@ -1027,7 +1029,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         ${item('reports', 'chart', 'Reports & ZRA summary', 'Income by month and property')}
         ${item('messages', 'chat', 'Messages from tenants', newFromTenants().length ? `${newFromTenants().length} new` : 'Replies to notices and reminders')}
         ${item('requests', 'tool', 'Repairs', `${state.requests.filter((r) => r.status !== 'done').length} open`)}
-        ${item('reminders', 'bell', 'Automatic reminders', 'When and how tenants are reminded')}
+        ${item('reminders', 'bell', 'Rent reminders', rentNotesOn() ? 'On: your phone reminds you when rent is due or late' : 'Get reminded when rent is due or late')}
         ${item('caretakers', 'key', 'Caretakers', `${state.caretakers.length} caretaker${state.caretakers.length === 1 ? '' : 's'}`)}
         ${item('activity', 'clock', 'Activity log', 'Who did what, and when')}
       </div>
@@ -1159,26 +1161,99 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   }
 
   L.reminders = function () {
-    const r = state.reminders;
+    const r = reminderSettings();
     const sw = (k, title, meta) => `<label class="switch"><div class="grow"><div style="font-weight:560">${title}</div><div class="small muted">${meta}</div></div><input type="checkbox" data-action="toggleReminder" data-k="${k}" ${r[k] ? 'checked' : ''}></label>`;
     const sample = activeTenants().find((t) => acct(t).status === 'overdue') || activeTenants()[0];
-    return `${head('Automatic reminders', { back: 'more', sub: 'Sent for you, so you don\'t have to chase' })}
+    const native = !!(window.LHNative && window.LHNative.notify), on = rentNotesOn();
+    const status = !native
+      ? `<div class="card pad link-card"><span class="at-icon">${icon('bell')}</span><div class="grow"><strong>In the Android app</strong><div class="small muted">Your phone reminds you on these days, even when Landlord Hub is closed. Here in the browser, late tenants show under the bell on Home.</div></div></div>`
+      : on
+        ? `<div class="card pad link-card ok"><span class="at-icon">${icon('check')}</span><div class="grow"><strong>On: this phone reminds you</strong><div class="small muted">At 9:00 on the days below, for tenants who haven't paid. Tap the reminder to check the message and send it.</div><button class="btn sm mt-s" data-action="rentNotesOff">Turn off on this phone</button></div></div>`
+        : `<div class="card pad link-card"><span class="at-icon">${icon('bell')}</span><div class="grow"><strong>Get reminded when rent is due</strong><div class="small muted">Your phone tells you at 9:00 on the days below which tenants haven't paid. Tap it, check the message, and send it to them.</div><button class="btn primary sm mt-s" data-action="rentNotesOn">Turn on</button></div></div>`;
+    return `${head('Rent reminders', { back: 'more', sub: 'You get reminded. You choose what tenants receive.' })}
+      ${status}
+      <section class="section"><div class="section-head"><h2>Remind me</h2></div>
       <div class="list">
-        ${sw('before5', '5 days before', 'A friendly heads-up')}
-        ${sw('dueDay', 'On the due day', 'Includes the Pay button')}
-        ${sw('late3', '3 days late', 'Polite but clear')}
+        ${sw('before3', '3 days before the due date', 'For tenants who haven\'t paid yet')}
+        ${sw('dueDay', 'On the due day', 'For tenants who haven\'t paid yet')}
+        ${sw('late3', '3 days late', 'For tenants who still owe')}
         ${sw('weekly', 'Every week after that', 'Until the rent is paid')}
-      </div>
-      <section class="section"><div class="section-head"><h2>Send by</h2></div>
-        <div class="card pad"><div class="seg" role="radiogroup">
-          ${[['whatsapp', 'WhatsApp, SMS if no WhatsApp'], ['sms', 'SMS only']].map(([v, l]) => `<label><input type="radio" name="ch" value="${v}" data-action="reminderChannel" ${r.channel === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}
-        </div><div class="small muted mt">Each tenant gets reminders in their own language: English, Bemba or Nyanja. Change it on the tenant's page.</div></div>
-      </section>
+      </div></section>
+      <div class="small muted mt">Nothing is sent to a tenant by itself. Each reminder opens a ready-written message in the tenant's own language (English, Bemba or Nyanja). You read it and tap WhatsApp or SMS to send it.</div>
       ${sample ? `<section class="section"><div class="section-head"><h2>Preview</h2></div>
         <div class="card pad">${['en', 'bem', 'nya'].map((l) => `<div class="small muted" style="font-weight:600;margin-bottom:4px">${LH.LANGS[l]}</div><div class="prose small" style="margin-bottom:14px">${esc(reminderFor(sample, l))}</div>`).join('')}
         <div class="small faint">Bemba and Nyanja wording is a first draft — have a native speaker review it before launch.</div></div>
       </section>` : ''}`;
   };
+  /* ---------- Rent reminders for the landlord (Android app) ----------
+     The phone shows a notification 3 days before rent is due, on the due day and 3 days late (and
+     weekly after that, if chosen) for tenants who still owe it. Tapping it opens the reminder to send,
+     ready-written; nothing goes to a tenant until the landlord taps Send. Turned on per phone. */
+  const RENT_NOTES = 'landlordhub.rentnotify', RENT_NOTE_IDS = 'landlordhub.rentnotifyids';
+  const rentNotesOn = () => !!(window.LHNative && window.LHNative.notify) && session && session.role === 'landlord' && !session.member && lsGet(RENT_NOTES) === '1';
+  // The schedule (shared by the landlord's devices). Older records had "5 days before"; the weekly one starts off.
+  function reminderSettings() {
+    const r = state.reminders || (state.reminders = {});
+    if (!r.v2) {
+      r.before3 = r.before3 !== undefined ? r.before3 : r.before5 !== false;
+      r.dueDay = r.dueDay !== false; r.late3 = r.late3 !== false; r.weekly = false; r.v2 = true;
+      delete r.before5;
+    }
+    return r;
+  }
+  // Every rent period still unpaid, now or in the next two months, with what's left to pay on it.
+  // Payments (and any credit) count against the oldest period first, exactly as on the tenant's page,
+  // so a tenant who is behind is still reminded about their next rent too.
+  function owingForReminders() {
+    const today = T(), ahead = LH.addDays(today, 62), from = LH.addDays(today, -70);
+    const out = [];
+    activeTenants().forEach((t) => {
+      const a = LH.account(state, t, ahead), u = unitOf(t), pr = u && propOf(u);
+      const place = `${u ? u.label : 'their home'}${pr ? ', ' + pr.name : ''}`;
+      (a.periods || []).forEach((p) => {
+        const left = Math.round((p.amount - (p.paidAmt || 0)) * 100) / 100;
+        if (p.state !== 'paid' && left > 0.009 && p.due >= from) out.push({ id: t.id, name: t.name, place, amount: left, due: p.due });
+      });
+    });
+    return out;
+  }
+  let rentNotesTimer = null;
+  function scheduleRentNotes(soon) {
+    clearTimeout(rentNotesTimer);
+    rentNotesTimer = setTimeout(async () => {
+      const N = window.LHNative && window.LHNative.notify;
+      if (!N) return;
+      let old = []; try { old = JSON.parse(lsGet(RENT_NOTE_IDS) || '[]'); } catch (e) {}
+      try {
+        await N.cancel(old); lsSet(RENT_NOTE_IDS, '[]');
+        if (!rentNotesOn()) return;
+        const plan = LH.planRentReminders(owingForReminders(), reminderSettings(), new Date(), money, 60).slice(0, 60);
+        await N.schedule(plan.map((x) => ({ id: x.id, at: x.at, title: x.title, body: x.body, extra: { remind: x.ids, kind: x.kind } })));
+        lsSet(RENT_NOTE_IDS, JSON.stringify(plan.map((x) => x.id)));
+      } catch (e) { console.warn('Landlord Hub reminders:', e); }
+    }, soon ? 300 : 2000);
+  }
+  // Tapped: open the ready-written reminders for those who still owe.
+  function openRentNote(extra) {
+    if (!session || session.role !== 'landlord' || !extra || !Array.isArray(extra.remind)) return;
+    const owing = new Set(owingForReminders().map((x) => x.id)); // includes rent that isn't due yet
+    const ids = extra.remind.filter((id) => owing.has(id));
+    location.hash = '#/home';
+    if (!ids.length) return toast('Everyone in that reminder has paid. Nothing to send.');
+    setTimeout(() => remindSheet(ids), 250);
+  }
+  async function turnOnRentNotes() {
+    const N = window.LHNative && window.LHNative.notify; if (!N) return;
+    let st = await N.status().catch(() => 'denied');
+    if (st !== 'granted') st = await N.allow().catch(() => 'denied');
+    if (st !== 'granted') return toast('Notifications are blocked. Allow them for Landlord Hub in your phone settings, then try again.');
+    lsSet(RENT_NOTES, '1'); reminderSettings(); save();
+    log('Turned on rent reminders on this phone');
+    scheduleRentNotes(true); render();
+    toast("On. You'll be reminded before rent is due and when it's late.");
+  }
+  if (window.LHNative && window.LHNative.notify) window.LHNative.notify.onTap((extra) => openRentNote(extra));
+
   function reminderFor(t, lang) {
     const a = acct(t), u = a.unit;
     return LH.reminderText(lang || t.lang || 'en', {
@@ -1551,7 +1626,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   }
   if (window.LHNative) {
     window.LHNative.onMessage((m) => nativeSmsSync(m));
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') nativeSmsSync(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { nativeSmsSync(); scheduleRentNotes(); } });
   }
   function smsAutoCard() {
     const head = '<section class="section"><div class="section-head"><h2>Automatic MoMo, Airtel and Zamtel payments</h2></div>';
@@ -1862,8 +1937,8 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         <div class="small faint mt-s">In ${LH.LANGS[list[0].lang || 'en']} · ${LH.prettyPhone(list[0].phone)}</div>
         <div class="btn-row mt"><a class="btn primary" href="${LH.waLink(list[0].phone, reminderFor(list[0]))}" target="_blank" rel="noopener" data-after="reminded" data-id="${list[0].id}">${icon('chat', 'sm')}WhatsApp</a><a class="btn" href="${LH.smsLink(list[0].phone, reminderFor(list[0]))}" data-after="reminded" data-id="${list[0].id}">${icon('sms', 'sm')}SMS</a></div>`
       : `<div class="small muted" style="margin-bottom:12px">Each message is written in the tenant's language with their own amount.</div>
-        <div class="list">${list.map((t) => { const a = acct(t); const sent = state.remindedAt[t.id] === iso(T()); return `<div class="row-wrap"><div class="row static"><span class="avatar">${initials(t.name)}</span><div class="grow"><div class="title">${esc(t.name)}</div><div class="meta">${money(a.balance)} · ${LH.LANGS[t.lang || 'en']}</div></div></div><a class="btn sm${sent ? '' : ' primary'}" href="${LH.waLink(t.phone, reminderFor(t))}" target="_blank" rel="noopener" data-after="reminded" data-id="${t.id}">${sent ? 'Sent' : 'Send'}</a></div>`; }).join('')}</div>`}
-      <div class="small faint mt">Automatic reminders are ${Object.values(state.reminders).some((v) => v === true) ? 'on' : 'off'}. <a href="#/reminders" data-action="closeSheet">Change schedule</a></div>`);
+        <div class="list">${list.map((t) => { const a = acct(t); const sent = state.remindedAt[t.id] === iso(T()); return `<div class="row-wrap"><div class="row static"><span class="avatar">${initials(t.name)}</span><div class="grow"><div class="title">${esc(t.name)}</div><div class="meta">${a.balance > 0 ? `${money(a.balance)} owed` : `${money(a.per)} due ${fmtDay(a.dueDate)}`} · ${LH.LANGS[t.lang || 'en']}</div></div></div><a class="btn sm${sent ? '' : ' primary'}" href="${LH.waLink(t.phone, reminderFor(t))}" target="_blank" rel="noopener" data-after="reminded" data-id="${t.id}">${sent ? 'Sent' : 'Send'}</a></div>`; }).join('')}</div>`}
+      <div class="small faint mt">${window.LHNative && window.LHNative.notify ? `Rent reminders on this phone are ${rentNotesOn() ? 'on' : 'off'}.` : 'Your phone can remind you when rent is due (Android app).'} <a href="#/reminders" data-action="closeSheet">Reminder settings</a></div>`);
   }
 
   function newNoticeSheet(o = {}) {
@@ -2804,8 +2879,9 @@ We never sell your data or use it for adverts.</div>
       log(`Ended tenancy for ${t.name} (${unitOf(t).label})`);
       save(); closeSheet(); go('tenants'); toast(`${unitOf(t).label} is now vacant`);
     },
-    toggleReminder: (d, el) => { state.reminders[d.k] = el.checked; save(); toast(el.checked ? 'Reminder turned on' : 'Reminder turned off'); },
-    reminderChannel: (d, el) => { state.reminders.channel = el.value; save(); },
+    toggleReminder: (d, el) => { reminderSettings()[d.k] = el.checked; save(); scheduleRentNotes(true); toast(el.checked ? 'Reminder turned on' : 'Reminder turned off'); },
+    rentNotesOn: () => turnOnRentNotes(),
+    rentNotesOff: () => { lsSet(RENT_NOTES, null); scheduleRentNotes(true); render(); toast('Rent reminders are off on this phone'); },
     exportCsv: () => {
       const y = String(T().getFullYear());
       const rows = [['Receipt', 'Date', 'Tenant', 'House or room', 'Property', 'Amount (K)', 'Method', 'Reference', 'Recorded by']];
@@ -3697,6 +3773,7 @@ We never sell your data or use it for adverts.</div>
 
   // Android app: record any MoMo / Airtel payments that came in while the app was closed.
   setTimeout(() => nativeSmsSync(), 600);
+  setTimeout(() => scheduleRentNotes(), 1200); // rent reminders: refreshed every time the app opens
 
   // Shared from another app (Android: Share → Landlord Hub on a MoMo/Airtel SMS): open the reader with it.
   try {

@@ -56,6 +56,15 @@ gradlew.bat assembleDebug
 
 The app file appears in `android\app\build\outputs\apk\debug\app-debug.apk`. A copy for phones is kept in `builds\Landlord-Hub-test.apk`; with `node server.js` running, a phone on the same Wi-Fi can download it from `http://192.168.1.177:5173/builds/Landlord-Hub-test.apk`.
 
+## Rent reminders for the landlord
+
+In **More → Rent reminders → Turn on**, the landlord's phone shows a notification at about 9:00 three days before rent is due, on the due day and three days late (and weekly after that, if chosen), for tenants who haven't paid. Tenants due the same day share one notification. Tapping it opens the ready-written reminder; nothing is sent to a tenant until the landlord taps WhatsApp or SMS.
+
+- The reminders are set up on the phone itself (Capacitor Local Notifications), so they come even when the app is closed, offline or after a restart. They are refreshed whenever the app opens, a payment is recorded or one arrives from another device.
+- A payment recorded on another device only cancels this phone's reminder once this phone has opened the app and synced.
+- No "exact alarm" permission is used; reminders may arrive a few minutes after 9:00.
+- `npm run android:sync` also runs `scripts/fix-android-plugins.js`, which lets the plugin build with Android Studio's Java 25 (it otherwise demands a Java 21 install).
+
 ## Download page for other phones
 
 Anyone can download the test app from GitHub, on any network:
