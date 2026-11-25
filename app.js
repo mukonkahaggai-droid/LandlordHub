@@ -577,7 +577,7 @@
     }
     const quick = tenantSide
       ? (n ? ['Noted, thank you.', 'I have a question: '] : about === 'rent' ? ["I've already paid you. ", 'Can we talk about my rent? '] : ['Hello, '])
-      : ['Thank you, noted.', `Thank you, ${first(t.name)}. I'll look out for it.`, 'Please call me when you can.'];
+      : ['Thank you. Your message has been noted.', 'Thank you. We will confirm once the payment has been received.', 'Kindly contact the management office at your earliest convenience.'];
     const earlier = n ? threadOf(t.id).filter((m) => m.about === n.id) : threadOf(t.id).slice(-3);
     openSheet(`${sheetHead(n ? `Reply to “${esc(n.title)}”` : `Message ${esc(to)}`)}
       ${earlier.length ? `<div class="thread mb">${earlier.map((m) => bubble(m, tenantSide ? 'tenant' : 'landlord')).join('')}</div>` : ''}
@@ -862,7 +862,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         </dl>
         <div class="btn-row mt">
           <a class="btn sm" href="tel:+${LH.intl(t.phone)}">${icon('phone', 'sm')}Call</a>
-          <a class="btn sm" href="${LH.waLink(t.phone, `Hello ${first(t.name)}, `)}" target="_blank" rel="noopener">${icon('chat', 'sm')}WhatsApp</a>
+          <a class="btn sm" href="${LH.waLink(t.phone, `Dear ${t.name},\n\n`)}" target="_blank" rel="noopener">${icon('chat', 'sm')}WhatsApp</a>
         </div>
         <button class="btn block mt-s" data-action="editTenant" data-id="${t.id}">${icon('edit', 'sm')}Edit details</button></div>
       </section>
@@ -1182,8 +1182,8 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   function reminderFor(t, lang) {
     const a = acct(t), u = a.unit;
     return LH.reminderText(lang || t.lang || 'en', {
-      first: first(t.name), amount: money(Math.max(a.balance, a.per)), unit: u.label,
-      due: a.dueDate, late: a.daysLate > 0, landlord: state.landlord.name, phone: LH.prettyPhone(state.landlord.phone),
+      name: t.name, amount: money(Math.max(a.balance, a.per)), unit: u.label,
+      due: a.dueDate, late: a.daysLate > 0, signoff: signoffFor(t), phone: LH.prettyPhone(state.landlord.phone),
     });
   }
 
@@ -1410,11 +1410,23 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
         <p class="small faint mt">Money is matched to a tenant by any of their phone lines. Payments already recorded are skipped.</p>
       </form>`);
   }
-  // The thank-you the landlord can send with one tap after a payment is recorded.
+  /* Messages to tenants are formal and signed by the property's management, never with the
+     landlord's own name: "Kabulonga Flats Management", or "The Management" across several properties. */
+  function signoffFor(t) {
+    const u = t && unitOf(t), pr = u && propOf(u);
+    return pr && pr.name ? `${pr.name} Management` : 'The Management';
+  }
+  function signoffForMany(ids) {
+    const props = new Set((ids || []).map((id) => { const x = byId(state.tenants, id), u = x && unitOf(x); return u ? u.propertyId : null; }));
+    if (props.size !== 1) return 'The Management';
+    const pr = byId(state.properties, [...props][0]);
+    return pr && pr.name ? `${pr.name} Management` : 'The Management';
+  }
+  // The acknowledgement the landlord can send with one tap after a payment is recorded.
   function receiptMessage(t, p) {
-    const a = acct(t), when = fmtDate(parse(p.date));
-    const bal = a.balance > 0 ? `You still owe ${money(a.balance)}.` : a.balance < 0 ? `You are ${money(-a.balance)} ahead.` : 'Your rent is fully paid.';
-    return `Hello ${first(t.name)},\n\n${money(p.amount)} received for your rent on ${when}. Thank you.\n\n${bal}\nReceipt ${p.receipt}\n\n${state.landlord.name}`;
+    const a = acct(t), when = LH.fmtFormal(parse(p.date));
+    const bal = a.balance > 0 ? `Outstanding balance: ${money(a.balance)}.` : a.balance < 0 ? `Your account is in credit by ${money(-a.balance)}.` : 'Your rent account is fully paid up.';
+    return `Dear ${t.name},\n\nRE: PAYMENT RECEIVED – ${unitOf(t).label.toUpperCase()}\n\nWe acknowledge receipt of ${money(p.amount)} towards your rent, paid on ${when}.\nReceipt number: ${p.receipt}\n\n${bal}\n\nThank you for your payment.\n\nYours faithfully,\n${signoffFor(t)}`;
   }
   function smsResults(found, auto) {
     const done = [], ask = [], dup = [];
@@ -1804,7 +1816,7 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const p = byId(state.payments, id); if (!p) return;
     const t = byId(state.tenants, p.tenantId), u = unitOf(t);
     const a = acct(t);
-    const text = `Receipt ${p.receipt}\n${money(p.amount)} received from ${t.name} for ${u.label}, ${propOf(u).name}.\nPaid ${fmtDate(parse(p.date))} by ${p.method}${p.ref ? ' (ref ' + p.ref + ')' : ''}.\nBalance now ${money(Math.max(0, a.balance))}.\n— ${state.landlord.name}, via Landlord Hub`;
+    const text = `OFFICIAL RECEIPT ${p.receipt}\n\nReceived from: ${t.name}\nAmount: ${money(p.amount)}\nFor: Rent – ${u.label}, ${propOf(u).name}\nDate paid: ${LH.fmtFormal(parse(p.date))}\nPayment method: ${p.method}${p.ref ? ' (Ref: ' + p.ref + ')' : ''}\nBalance outstanding: ${money(Math.max(0, a.balance))}\n\n${signoffFor(t)}\nIssued via Landlord Hub`;
     const L0 = state.landlord, prop = propOf(u);
     ensureWatermark();
     // A one-page, standard receipt: issuer, receipt number and date, payer, amount in figures and words,
@@ -1859,9 +1871,11 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
     const tt = o.tenant ? byId(state.tenants, o.tenant) : null;
     const T0 = LH.templates.find((x) => x.id === tpl);
     const fill = (s) => {
-      let out = s.replace(/\{landlord\}/g, state.landlord.name);
+      // Signed by the management (older drafts used {landlord}); never the landlord's own name.
+      const sign = tt ? signoffFor(tt) : signoffForMany(Array.isArray(o.audience) ? o.audience : activeTenants().map((x) => x.id));
+      let out = s.replace(/\{(landlord|signoff)\}/g, sign).replace(/\{phone\}/g, LH.prettyPhone(state.landlord.phone));
       for (const [k, v] of Object.entries(o.fills || {})) if (v) out = out.split(k).join(v);
-      if (tt) { const a = acct(tt); out = out.replace(/\{tenant\}/g, first(tt.name)).replace(/\{unit\}/g, unitOf(tt).label).replace(/\{amount\}/g, money(Math.max(0, a.balance))).replace(/\{due\}/g, fmtDate(a.dueDate)); }
+      if (tt) { const a = acct(tt); out = out.replace(/\{tenant\}/g, tt.name).replace(/\{unit\}/g, unitOf(tt).label).replace(/\{amount\}/g, money(Math.max(0, a.balance))).replace(/\{due\}/g, LH.fmtFormal(a.dueDate)); }
       return out.replace(/\{tenant\}/g, '[tenant name]').replace(/\{unit\}/g, '[house or room]').replace(/\{amount\}/g, '[amount]').replace(/\{due\}/g, '[due date]');
     };
     // Who is ticked: everyone by default, or the one tenant the notice was opened for.
@@ -2057,8 +2071,8 @@ From the rent records kept in Landlord Hub, ${fmtDate(T())}.`;
   }
   // The message: a greeting, a blank line, then the link on a line of its own so it can be tapped.
   const inviteMessage = (t, link) => /invited=1/.test(link)
-    ? `Hello ${first(t.name)},\n\nThis is ${state.landlord.name}. I now use Landlord Hub to keep track of rent and receipts.\n\nTap the link below and sign in with your number, ${LH.prettyPhone(t.phone)}, to see your rent, receipts and notices for ${unitOf(t).label}, ${propOf(unitOf(t)).name}:\n\n${link}\n\nThank you.`
-    : `Hello ${first(t.name)},\n\nThis is ${state.landlord.name}. I now use Landlord Hub to keep track of rent and receipts.\n\nPlease tap the link below to join me as the tenant of ${unitOf(t).label}, ${propOf(unitOf(t)).name}:\n\n${link}\n\nThank you.`;
+    ? `Dear ${t.name},\n\nRE: YOUR TENANCY RECORDS – ${unitOf(t).label.toUpperCase()}, ${propOf(unitOf(t)).name.toUpperCase()}\n\nPlease be advised that rent records, receipts and notices for ${propOf(unitOf(t)).name} are now kept on Landlord Hub.\n\nKindly tap the link below and sign in with your phone number, ${LH.prettyPhone(t.phone)}, to view your rent, receipts and notices:\n\n${link}\n\nYours faithfully,\n${signoffFor(t)}`
+    : `Dear ${t.name},\n\nRE: YOUR TENANCY RECORDS – ${unitOf(t).label.toUpperCase()}, ${propOf(unitOf(t)).name.toUpperCase()}\n\nPlease be advised that rent records, receipts and notices for ${propOf(unitOf(t)).name} are now kept on Landlord Hub.\n\nKindly tap the link below to join as the tenant of ${unitOf(t).label}:\n\n${link}\n\nYours faithfully,\n${signoffFor(t)}`;
   async function inviteSheet(id, justAdded) {
     const t = byId(state.tenants, id); if (!t) return;
     openSheet(`${sheetHead(justAdded ? `${first(t.name)} has been added` : 'Invite to the app')}${loaderHTML('', `Making ${esc(first(t.name))}'s link…`, true)}`);
@@ -2661,7 +2675,7 @@ We never sell your data or use it for adverts.</div>
       log(`Deleted ${room.name}`); save(); closeSheet(); render(); toast(`${room.name} deleted`);
     },
     editRents: (d) => editRentsSheet(d.id),
-    rentNotice: (d) => newNoticeSheet({ tpl: 'increase', audience: d.ids.split(','), fills: { '[date]': fmtDate(parse(d.from)), '[current rent]': d.old ? money(Number(d.old)) : '', '[new rent]': d.new ? money(Number(d.new)) : '' } }),
+    rentNotice: (d) => newNoticeSheet({ tpl: 'increase', audience: d.ids.split(','), fills: { '[date]': LH.fmtFormal(parse(d.from)), '[current rent]': d.old ? money(Number(d.old)) : '', '[new rent]': d.new ? money(Number(d.new)) : '' } }),
     propFilter: (d) => {
       ui.propFilter = d.f; render();
       // Keep the chosen chip in view; the row starts scrolled back to "All" after redrawing.
@@ -2912,7 +2926,7 @@ We never sell your data or use it for adverts.</div>
     },
     messageWhatsApp: (d, el) => {
       const form = el.closest('form');
-      const text = (form && form.text.value.trim()) || 'Hello, ';
+      const text = (form && form.text.value.trim()) || (session.role === 'landlord' ? 'Dear Tenant,\n\n' : 'Hello, ');
       window.open(LH.waLink(d.phone, text), '_blank', 'noopener');
     },
     shareReference: (d) => { const t = byId(state.tenants, d.id); if (t) window.open(LH.waLink('', referenceText(t)), '_blank', 'noopener'); },

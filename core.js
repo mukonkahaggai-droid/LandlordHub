@@ -18,6 +18,8 @@
   LH.fmtDate = (d) => `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
   LH.fmtDay = (d) => `${d.getDate()} ${MONTHS[d.getMonth()]}`;
   LH.fmtLong = (d) => `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS_LONG[d.getMonth()]}`;
+  // For letters and receipts: 1 December 2026.
+  LH.fmtFormal = (d) => `${d.getDate()} ${MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
   LH.monthLabel = (d) => `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
   LH.termLabel = (d) => `Term ${Math.floor(d.getMonth() / 4) + 1}, ${d.getFullYear()}`;
   LH.daysBetween = (a, b) => Math.round((b - a) / 864e5);
@@ -406,36 +408,40 @@
   /* ---------- Messages ----------
      Bemba and Nyanja are first drafts: have a native speaker review before launch. */
   LH.LANGS = { en: 'English', bem: 'Bemba', nya: 'Nyanja' };
+  /* Every message to tenants is written formally and signed by the property's management
+     ("Kabulonga Flats Management"), never with the landlord's own name. */
   LH.reminderText = function (lang, o) {
-    const d = LH.fmtDay(o.due);
+    const d = lang === 'en' ? LH.fmtFormal(o.due) : LH.fmtDay(o.due);
+    const sign = o.signoff || 'The Management';
     if (lang === 'nya')
-      return `Moni ${o.first}. Tikukumbutsani kuti lendi yanu ya ${o.amount} ya ${o.unit} ${o.late ? `yachedwa kuyambira pa ${d}` : `iyenera kulipilidwa pa ${d}`}. Lipilani pa MTN MoMo kapena Airtel Money mu Landlord Hub, kapena ku ${o.phone}. Zikomo, ${o.landlord}.`;
+      return `Wokondedwa ${o.name},\n\nTikukumbutsani kuti lendi yanu ya ${o.amount} ya ${o.unit} ${o.late ? `yachedwa kuyambira pa ${d}` : `iyenera kulipilidwa pa ${d}`}. Lipilani pa MTN MoMo kapena Airtel Money mu Landlord Hub, kapena ku ${o.phone}.\n\nNgati mwalipira kale, musasamale uthengawu.\n\nZikomo,\n${sign}`;
     if (lang === 'bem')
-      return `Mwapoleni ${o.first}. Tulemicinkulako ukuti ubukode bwenu bwa ${o.amount} ubwa ${o.unit} ${o.late ? `bwachelwa ukutula pa ${d}` : `bulefwaikwa pa ${d}`}. Lipileni pa MTN MoMo nangu Airtel Money muli Landlord Hub, nangu kuli ${o.phone}. Natotela, ${o.landlord}.`;
-    return `Hello ${o.first}, a reminder that your rent of ${o.amount} for ${o.unit} ${o.late ? `was due on ${d}` : `is due on ${d}`}. You can pay with MTN MoMo or Airtel Money in Landlord Hub, or to ${o.phone}. Thank you, ${o.landlord}.`;
+      return `Ba ${o.name},\n\nTulemicinkulako ukuti ubukode bwenu bwa ${o.amount} ubwa ${o.unit} ${o.late ? `bwachelwa ukutula pa ${d}` : `bulefwaikwa pa ${d}`}. Lipileni pa MTN MoMo nangu Airtel Money muli Landlord Hub, nangu kuli ${o.phone}.\n\nNga mwalilipila kale, mwilasakamana pali ili lyashi.\n\nNatotela,\n${sign}`;
+    return `Dear ${o.name},\n\nRE: RENT ${o.late ? 'OVERDUE' : 'REMINDER'} – ${o.unit.toUpperCase()}\n\nThis is a reminder that your rent of ${o.amount} ${o.late ? `was due on ${d} and is now overdue` : `is due on ${d}`}. Kindly make payment by MTN MoMo or Airtel Money through Landlord Hub, or to ${o.phone}.\n\nIf you have already made this payment, please disregard this message.\n\nYours faithfully,\n${sign}`;
   };
 
+  // Placeholders filled in by the app: {tenant} {unit} {amount} {due} {phone} {signoff}.
   LH.templates = [
-    { id: 'general', name: 'General', title: '', body: '' },
+    { id: 'general', name: 'General', title: '', body: 'Dear Tenant,\n\n\n\nYours faithfully,\n{signoff}' },
     {
       id: 'service', name: 'Water / power',
-      title: 'Water interruption on [day]',
-      body: 'Dear tenants,\n\nLWSC has told us that water will be off on [day] from [start time] to [end time]. Please store enough water the evening before.\n\nThank you for your patience.\n{landlord}',
+      title: 'Notice: water interruption on [day]',
+      body: 'Dear Tenants,\n\nRE: SCHEDULED WATER INTERRUPTION\n\nPlease be advised that Lusaka Water Supply and Sanitation Company (LWSC) has notified us of a scheduled water interruption on [day], from [start time] to [end time].\n\nYou are kindly advised to store sufficient water in advance.\n\nWe apologise for any inconvenience caused and thank you for your cooperation.\n\nYours faithfully,\n{signoff}',
     },
     {
       id: 'increase', name: 'Rent increase',
-      title: 'Rent change from [date]',
-      body: 'Dear tenant,\n\nThis is to let you know that your monthly rent will change from [current rent] to [new rent] from [date]. This notice is given in line with your lease agreement.\n\nIf you have any questions, please call or WhatsApp me.\n\nRegards,\n{landlord}',
+      title: 'Notice of rent review',
+      body: 'Dear Tenant,\n\nRE: NOTICE OF RENT REVIEW\n\nPlease be advised that, in accordance with the terms of your tenancy agreement, the monthly rent for your unit will be revised from [current rent] to [new rent] with effect from [date].\n\nKindly ensure that all payments due from that date reflect the revised amount.\n\nShould you have any queries, please contact the management office on {phone}.\n\nYours faithfully,\n{signoff}',
     },
     {
       id: 'late', name: 'Late payment',
-      title: 'Rent overdue',
-      body: 'Dear {tenant},\n\nOur records show that {amount} for {unit} has been overdue since {due}. Please pay by [date], or contact me so we can agree a payment plan.\n\nRegards,\n{landlord}',
+      title: 'Notice of rent arrears',
+      body: 'Dear {tenant},\n\nRE: OUTSTANDING RENT – {unit}\n\nOur records indicate that rent of {amount} for {unit} has been outstanding since {due}.\n\nYou are kindly requested to settle the outstanding amount by [date]. If you are unable to do so, please contact the management office on {phone} to agree a payment arrangement.\n\nIf you have already made this payment, please disregard this notice.\n\nYours faithfully,\n{signoff}',
     },
     {
       id: 'vacate', name: 'Notice to vacate',
       title: 'Notice to vacate',
-      body: 'Dear {tenant},\n\nThis letter is formal notice to vacate {unit} by [date].\n\nReason: [reason]\n\nPlease arrange a handover inspection before you move out so that your deposit can be settled.\n\nRegards,\n{landlord}',
+      body: 'Dear {tenant},\n\nRE: NOTICE TO VACATE – {unit}\n\nThis letter serves as formal notice that you are required to vacate {unit} on or before [date].\n\nReason: [reason]\n\nPlease arrange a handover inspection with the management office before you move out, so that your deposit can be assessed and settled.\n\nYours faithfully,\n{signoff}',
     },
   ];
 
